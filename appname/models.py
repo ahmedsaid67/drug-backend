@@ -73,7 +73,7 @@ class PasswordResetCode(models.Model):
 # ------ ilaç -----
 
 class IlacKategori(models.Model):
-    name = models.CharField(max_length=50, null=True, blank=True)
+    name = models.CharField(max_length=200, null=True, blank=True)
     img = models.ImageField(upload_to='ilac_kategori_img',null=True,blank=True)
 
     def __str__(self):
@@ -101,11 +101,12 @@ class Form(models.Model):
 
 
 class Ilac(models.Model):
-    name = models.CharField(max_length=150, null=True, blank=True)
-    etken_madde = models.CharField(max_length=100, null=True, blank=True)
+    name = models.CharField(max_length=250, null=True, blank=True)
+    etken_madde = models.CharField(max_length=200, null=True, blank=True)
     kullanim_uyarisi = models.CharField(max_length=300, null=True, blank=True)
     document = models.FileField(upload_to='documents', null=True, blank=True)  # PDF dosyası için alan
     ilac_kategori = models.ForeignKey(IlacKategori, null=True, blank=True, on_delete=models.SET_NULL)
+    ilac_form = models.ForeignKey(Form, null=True, blank=True, on_delete=models.SET_NULL)
     hassasiyet_turu = models.ForeignKey(HassasiyetTuru, null=True, blank=True, on_delete=models.SET_NULL)
     hastaliklar = models.ManyToManyField(Hastalik, related_name="ilaclar")
     kontsantrasyon_ml = models.DecimalField(max_digits=9, decimal_places=4, null=True,blank=True)

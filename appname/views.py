@@ -399,13 +399,47 @@ class FormViewSet(viewsets.ModelViewSet):
     serializer_class = FormSerializers
     pagination_class = NoPagination
 
+    @action(detail=False, methods=['post'])
+    def bulk_create_from_excel(self, request):
+        file = request.FILES.get('file')
+        if not file:
+            return Response({'error': 'No file uploaded'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            # Read the uploaded Excel file
+            df = pd.read_excel(file)
+
+            # Check if required columns exist
+            if 'name' not in df.columns or 'durum' not in df.columns:
+                return Response({'error': 'Excel file must contain "name" and "durum" columns'},
+                                status=status.HTTP_400_BAD_REQUEST)
+
+            # Clean and validate data
+            df_filtered = df[df['durum'] == False]  # Filter rows where 'durum' is False
+
+            # Extract unique names
+            names = df_filtered['name'].dropna().str.strip().unique()
+
+            # Check existing categories in the database
+            existing_categories = set(Form.objects.filter(name__in=names).values_list('name', flat=True))
+
+            # Create new `IlacKategori` instances for names not already in the database
+            new_names = [name for name in names if name not in existing_categories]
+            categories = [Form(name=name) for name in new_names]
+            Form.objects.bulk_create(categories)
+
+            return Response({'status': 'Categories created successfully'}, status=status.HTTP_201_CREATED)
+        except Exception as e:
+            return Response({'error': f'An error occurred while processing the file: {str(e)}'},
+                            status=status.HTTP_400_BAD_REQUEST)
+
 
 
 from .models import Ilac
 from .serializers import IlacListSerializer,IlacDetailSerializer
 
 class IlacViewSet(viewsets.ModelViewSet):
-    queryset = Ilac.objects.all().select_related('ilac_kategori', 'hassasiyet_turu').prefetch_related('hastaliklar').order_by('id')
+    queryset = Ilac.objects.all().select_related('ilac_kategori', 'hassasiyet_turu','ilac_form').prefetch_related('hastaliklar').order_by('id')
 
     def get_serializer_class(self):
         if self.action in ['list', 'medications_by_category', 'medications_by_category_no_pagination']:
@@ -418,7 +452,7 @@ class IlacViewSet(viewsets.ModelViewSet):
             return Ilac.objects.only('id', 'name', 'etken_madde', 'hassasiyet_turu').select_related(
                 'hassasiyet_turu').order_by('id')
         # Diğer işlemler için tam queryset
-        return Ilac.objects.select_related('ilac_kategori', 'hassasiyet_turu').prefetch_related('hastaliklar').order_by(
+        return Ilac.objects.select_related('ilac_kategori', 'hassasiyet_turu', 'hassasiyet_turu','ilac_form').prefetch_related('hastaliklar').order_by(
             'id')
 
     @action(detail=False, methods=['get'], url_path='medications-by-category')
@@ -460,14 +494,12 @@ class IlacViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(medications, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
-
-
-
     @action(detail=False, methods=['post'])
     def bulk_create_from_excel(self, request):
         file = request.FILES.get('file')
         if not file:
-            return Response({'error': 'No file uploaded'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'error': 'No file uploaded. Please upload a valid Excel file.'},
+                            status=status.HTTP_400_BAD_REQUEST)
 
         try:
             # Excel dosyasını oku
@@ -475,26 +507,40 @@ class IlacViewSet(viewsets.ModelViewSet):
 
             # Gerekli sütunlar kontrolü
             required_columns = ['name', 'durum', 'etken madde', 'ilaç kategori', 'Kullanım Uyarı', 'hassasiyet türü',
-                                'hastalıklar', 'Konsantrasyon ml', 'Konsantrasyon mg']
-            if not all(column in df.columns for column in required_columns):
-                return Response({
-                                    'error': 'Excel file must contain "name", "etken madde", "ilaç kategori", "hassasiyet türü", "hastalıklar", and "durum" columns'},
-                                status=status.HTTP_400_BAD_REQUEST)
+                                'ilaç form', 'hastalıklar', 'Konsantrasyon ml', 'Konsantrasyon mg']
+            missing_columns = [col for col in required_columns if col not in df.columns]
+            if missing_columns:
+                return Response(
+                    {'error': f'Excel file is missing the following required columns: {", ".join(missing_columns)}'},
+                    status=status.HTTP_400_BAD_REQUEST)
 
             # Yeni ilaçlar listesi
             new_ilac_list = []
             for _, row in df.iterrows():
                 # Eğer durum True ise devam et (zaten oluşturulmuşsa)
-                if row['durum'] == True:
+
+                isim = row['name']
+                if row['durum'] == True or pd.isna(isim):
                     continue
 
-                # İlgili nesneleri bul veya oluştur
-                ilac_kategori = IlacKategori.objects.filter(id=row['ilaç kategori']).first()
-                hassasiyet_turu = HassasiyetTuru.objects.filter(id=row['hassasiyet türü']).first()
+                kategori = row.get('ilaç kategori', '')
+                if not pd.isna(kategori):
+                    ilac_kategori = IlacKategori.objects.filter(id=row['ilaç kategori']).first()
+                else:
+                    ilac_kategori=None
 
-                if not ilac_kategori or not hassasiyet_turu:
-                    return Response({'error': 'Invalid IlacKategori or HassasiyetTuru ID'},
-                                    status=status.HTTP_400_BAD_REQUEST)
+                kategori_form = row.get('ilaç form', '')
+                if not pd.isna(kategori_form):
+                    ilac_form = Form.objects.filter(id=row['ilaç form']).first()
+                else:
+                    ilac_form=None
+
+                kategori_tur = row.get('hassasiyet türü', '')
+                if not pd.isna(kategori_tur):
+                    hassasiyet_turu = HassasiyetTuru.objects.filter(id=row['hassasiyet türü']).first()
+                else:
+                    hassasiyet_turu = None
+
 
 
 
@@ -503,15 +549,23 @@ class IlacViewSet(viewsets.ModelViewSet):
                 if pd.isna(kullanim_uyarisi):
                     kullanim_uyarisi = ''
 
+                # Konsantrasyon değerleri NaN mı kontrol et
+                konsantrasyon_ml = row['Konsantrasyon ml']
+                konsantrasyon_mg = row['Konsantrasyon mg']
+                if pd.isna(konsantrasyon_ml) or pd.isna(konsantrasyon_mg):
+                    konsantrasyon_ml = None
+                    konsantrasyon_mg = None
+
                 # Yeni ilaç nesnesi oluştur
                 new_ilac = Ilac(
                     name=row['name'],
+                    ilac_form=ilac_form,
                     etken_madde=row['etken madde'],
                     ilac_kategori=ilac_kategori,
                     hassasiyet_turu=hassasiyet_turu,
-                    kontsantrasyon_ml=row['Konsantrasyon ml'],
-                    kontsantrasyon_mg=row['Konsantrasyon mg'],
-                    kullanim_uyarisi=kullanim_uyarisi  # NaN yerine boş string atanacak
+                    kontsantrasyon_ml=konsantrasyon_ml,
+                    kontsantrasyon_mg=konsantrasyon_mg,
+                    kullanim_uyarisi=kullanim_uyarisi
                 )
                 new_ilac.save()  # Önce kaydetmemiz gerekiyor ki ManyToMany alanına hastalıkları ekleyebilelim
 
@@ -527,7 +581,8 @@ class IlacViewSet(viewsets.ModelViewSet):
 
                 new_ilac_list.append(new_ilac)
 
-            return Response({'status': 'Ilac records created successfully'}, status=status.HTTP_201_CREATED)
+            return Response({'status': 'Ilac records created successfully', 'records_created': len(new_ilac_list)},
+                            status=status.HTTP_201_CREATED)
 
         except Exception as e:
             return Response({'error': f'An error occurred while processing the file: {str(e)}'},
@@ -669,11 +724,11 @@ from .serializers import KiloDozSerializers
 from decimal import Decimal, ROUND_HALF_UP
 
 
-class KiloDozViewSet(viewsets.ModelViewSet):
-    queryset = KiloDoz.objects.all().order_by('id')
-    serializer_class = KiloDozSerializers
+class BaseOlcekHesaplayici:
 
     KASIK_OLCEGI_ML = Decimal('5')
+
+    SPOON_ACCOUNTING_CATEGORIES = [1,5,6,7,17,18,29,30,31,35,45,2,3,19,32,27]
 
     def olcek_formatla(self, olcek_sayisi):
         tam_olcek = int(olcek_sayisi)
@@ -730,6 +785,12 @@ class KiloDozViewSet(viewsets.ModelViewSet):
             else:
                 return f"{tam_olcek} ölçek"
 
+
+class KiloDozViewSet(viewsets.ModelViewSet, BaseOlcekHesaplayici):
+    queryset = KiloDoz.objects.all().order_by('id')
+    serializer_class = KiloDozSerializers
+
+
     @action(detail=False, methods=['get'], url_path='get-dosage-by-weight')
     def get_dosage_by_weight(self, request):
         kilo = request.query_params.get('kilo')
@@ -760,9 +821,14 @@ class KiloDozViewSet(viewsets.ModelViewSet):
 
         if tipik_max_doz is None:
             # `tipik_max_doz` değeri yoksa sadece minimum doz üzerinden hesapla
-            min_kasik = (min_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-            min_kasik_mesaj = self.olcek_formatla(min_kasik)
-            doz_message = f"{min_kasik_mesaj} kullanın."
+            if kilodoz.ilac.ilac_kategori.id in self.SPOON_ACCOUNTING_CATEGORIES:
+                min_kasik = (min_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                min_kasik_mesaj = self.olcek_formatla(min_kasik)
+                doz_message = f"{min_kasik_mesaj} kullanın."
+            else:
+                doz_message = f"{min_doz} ml kullanın."
+
+
         else:
             # `tipik_max_doz` mevcutsa maksimum doz hesaplama
             maks_doz = kilo * tipik_max_doz
@@ -770,24 +836,30 @@ class KiloDozViewSet(viewsets.ModelViewSet):
             # Eğer minimum doz veya maksimum doz, maksimum anlık dozu geçiyorsa
             if min_doz > maksimum_anlik_doz or maks_doz > maksimum_anlik_doz:
                 # Maksimum anlık doza göre hesapla
-                maks_kasik = (maksimum_anlik_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'),
-                                                                                  rounding=ROUND_HALF_UP)
-                maks_kasik_mesaj = self.olcek_formatla(maks_kasik)
-                doz_message = f"{maks_kasik_mesaj} kullanın."
-            else:
-                # Kaşık ölçüsüne göre min doz hesaplama
-                min_kasik = (min_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-                min_kasik_mesaj = self.olcek_formatla(min_kasik)
-
-                # Maksimum doz hesaplama
-                maks_kasik = (maks_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-                maks_kasik_mesaj = self.olcek_formatla(maks_kasik)
-
-                # Eğer minimum ve maksimum ölçü aynıysa, tek mesaj göster
-                if min_kasik_mesaj == maks_kasik_mesaj:
-                    doz_message = f"{min_kasik_mesaj} kullanın."
+                if kilodoz.ilac.ilac_kategori.id in self.SPOON_ACCOUNTING_CATEGORIES:
+                    maks_kasik = (maksimum_anlik_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'),
+                                                                                      rounding=ROUND_HALF_UP)
+                    maks_kasik_mesaj = self.olcek_formatla(maks_kasik)
+                    doz_message = f"{maks_kasik_mesaj} kullanın."
                 else:
-                    doz_message = f"{min_kasik_mesaj} veya {maks_kasik_mesaj} kullanın."
+                    doz_message = f"{maksimum_anlik_doz} ml kullanın."
+            else:
+                if kilodoz.ilac.ilac_kategori.id in self.SPOON_ACCOUNTING_CATEGORIES:
+                    # Kaşık ölçüsüne göre min doz hesaplama
+                    min_kasik = (min_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                    min_kasik_mesaj = self.olcek_formatla(min_kasik)
+
+                    # Maksimum doz hesaplama
+                    maks_kasik = (maks_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                    maks_kasik_mesaj = self.olcek_formatla(maks_kasik)
+
+                    # Eğer minimum ve maksimum ölçü aynıysa, tek mesaj göster
+                    if min_kasik_mesaj == maks_kasik_mesaj:
+                        doz_message = f"{min_kasik_mesaj} kullanın."
+                    else:
+                        doz_message = f"{min_kasik_mesaj} veya {maks_kasik_mesaj} kullanın."
+                else:
+                    doz_message = f"{min_doz} ml  veya {maks_doz} ml kullanın."
 
         # Kullanıcıya sunulacak ek bilgiler
         response_data = {
@@ -1106,66 +1178,10 @@ from .models import HastalikKiloDoz
 from .serializers import HastalikKiloDozSerializers
 
 
-class HastalikKiloDozViewSet(viewsets.ModelViewSet):
+class HastalikKiloDozViewSet(viewsets.ModelViewSet,BaseOlcekHesaplayici):
     queryset = HastalikKiloDoz.objects.all().order_by('id')
     serializer_class = HastalikKiloDozSerializers
 
-    KASIK_OLCEGI_ML = Decimal('5')
-
-    def olcek_formatla(self, olcek_sayisi):
-        tam_olcek = int(olcek_sayisi)
-        kalan = olcek_sayisi - tam_olcek
-
-        if tam_olcek == 0:
-            if kalan >= Decimal('0.875') and kalan < Decimal('1'):
-                return "1 ölçek"
-            elif kalan > Decimal('0.75') and kalan < Decimal('0.875'):
-                return "3/4 ölçek"
-            elif kalan == Decimal('0.75'):
-                return "3/4 ölçek"
-            elif kalan >= Decimal('0.625') and kalan < Decimal('0.75'):
-                return "3/4 ölçek"
-            elif kalan > Decimal('0.50') and kalan < Decimal('0.625'):
-                return "1/2 ölçek"
-            elif kalan == Decimal('0.50'):
-                return "1/2 ölçek"
-            elif kalan >= Decimal('0.375') and kalan < Decimal('0.50'):
-                return "1/2 ölçek"
-            elif kalan > Decimal('0.25') and kalan < Decimal('0.375'):
-                return "1/4 ölçek"
-            elif kalan == Decimal('0.25'):
-                return "1/4 ölçek"
-            elif kalan >= Decimal('0.125') and kalan < Decimal('0.25'):
-                return "1/4 ölçek"
-            elif kalan > Decimal('0') and kalan < Decimal('0.125'):
-                return "1/4 ölçek"
-            else:
-                return "0 ölçek"
-        else:
-            if kalan >= Decimal('0.875') and kalan < Decimal('1'):
-                return f"{tam_olcek + 1}  ölçek"
-            elif kalan > Decimal('0.75') and kalan < Decimal('0.875'):
-                return f"{tam_olcek} + 3/4 ölçek"
-            elif kalan == Decimal('0.75'):
-                return f"{tam_olcek} + 3/4 ölçek"
-            elif kalan >= Decimal('0.625') and kalan < Decimal('0.75'):
-                return f"{tam_olcek} + 3/4 ölçek"
-            elif kalan > Decimal('0.50') and kalan < Decimal('0.625'):
-                return f"{tam_olcek} + 1/2 ölçek"
-            elif kalan == Decimal('0.50'):
-                return f"{tam_olcek} + 1/2 ölçek"
-            elif kalan >= Decimal('0.375') and kalan < Decimal('0.50'):
-                return f"{tam_olcek} + 1/2 ölçek"
-            elif kalan > Decimal('0.25') and kalan < Decimal('0.375'):
-                return f"{tam_olcek} + 1/4 ölçek"
-            elif kalan == Decimal('0.25'):
-                return f"{tam_olcek} + 1/4 ölçek"
-            elif kalan >= Decimal('0.125') and kalan < Decimal('0.25'):
-                return f"{tam_olcek} + 1/4 ölçek"
-            elif kalan > Decimal('0') and kalan < Decimal('0.125'):
-                return f"{tam_olcek} ölçek"
-            else:
-                return f"{tam_olcek} ölçek"
 
     @action(detail=False, methods=['get'], url_path='get-dosage-by-weight-and-condition')
     def get_dosage_by_weight_and_condition(self, request):
@@ -1195,39 +1211,48 @@ class HastalikKiloDozViewSet(viewsets.ModelViewSet):
 
         # Minimum doz hesaplama
         min_doz = kilo * tipik_min_doz
-        min_kasik = (min_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-        min_kasik_mesaj = self.olcek_formatla(min_kasik)
 
-        if tipik_max_doz:
+        if tipik_max_doz is None:
+            # `tipik_max_doz` değeri yoksa sadece minimum doz üzerinden hesapla
+            if kilodoz.ilac.ilac_kategori.id in self.SPOON_ACCOUNTING_CATEGORIES:
+                min_kasik = (min_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                min_kasik_mesaj = self.olcek_formatla(min_kasik)
+                doz_message = f"{min_kasik_mesaj} kullanın."
+            else:
+                doz_message = f"{min_doz} ml kullanın."
+
+
+        else:
+            # `tipik_max_doz` mevcutsa maksimum doz hesaplama
             maks_doz = kilo * tipik_max_doz
 
             # Eğer minimum doz veya maksimum doz, maksimum anlık dozu geçiyorsa
             if min_doz > maksimum_anlik_doz or maks_doz > maksimum_anlik_doz:
                 # Maksimum anlık doza göre hesapla
-                maks_kasik = (maksimum_anlik_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'),
-                                                                                  rounding=ROUND_HALF_UP)
-                maks_kasik_mesaj = self.olcek_formatla(maks_kasik)
-                doz_message = f"{maks_kasik_mesaj} kullanın."
-            else:
-                # Maksimum doz hesaplama
-                maks_kasik = (maks_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-                maks_kasik_mesaj = self.olcek_formatla(maks_kasik)
-
-                # Eğer minimum ve maksimum ölçü aynıysa, tek mesaj göster
-                if min_kasik_mesaj == maks_kasik_mesaj:
-                    doz_message = f"{min_kasik_mesaj} kullanın."
+                if kilodoz.ilac.ilac_kategori.id in self.SPOON_ACCOUNTING_CATEGORIES:
+                    maks_kasik = (maksimum_anlik_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'),
+                                                                                      rounding=ROUND_HALF_UP)
+                    maks_kasik_mesaj = self.olcek_formatla(maks_kasik)
+                    doz_message = f"{maks_kasik_mesaj} kullanın."
                 else:
-                    doz_message = f"{min_kasik_mesaj} veya {maks_kasik_mesaj} kullanın."
-        else:
-            # Eğer tipik maksimum doz boş ise, sadece minimum doza göre mesaj göster
-            if min_doz > maksimum_anlik_doz:
-                # Maksimum anlık doz ile sınırlandır
-                maks_kasik = (maksimum_anlik_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'),
-                                                                                  rounding=ROUND_HALF_UP)
-                maks_kasik_mesaj = self.olcek_formatla(maks_kasik)
-                doz_message = f"{maks_kasik_mesaj} kullanın."
+                    doz_message = f"{maksimum_anlik_doz} ml kullanın."
             else:
-                doz_message = f"{min_kasik_mesaj} kullanın."
+                if kilodoz.ilac.ilac_kategori.id in self.SPOON_ACCOUNTING_CATEGORIES:
+                    # Kaşık ölçüsüne göre min doz hesaplama
+                    min_kasik = (min_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                    min_kasik_mesaj = self.olcek_formatla(min_kasik)
+
+                    # Maksimum doz hesaplama
+                    maks_kasik = (maks_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                    maks_kasik_mesaj = self.olcek_formatla(maks_kasik)
+
+                    # Eğer minimum ve maksimum ölçü aynıysa, tek mesaj göster
+                    if min_kasik_mesaj == maks_kasik_mesaj:
+                        doz_message = f"{min_kasik_mesaj} kullanın."
+                    else:
+                        doz_message = f"{min_kasik_mesaj} veya {maks_kasik_mesaj} kullanın."
+                else:
+                    doz_message = f"{min_doz} ml  veya {maks_doz} ml kullanın."
 
         # Kullanıcıya sunulacak ek bilgiler
         response_data = {
@@ -1331,66 +1356,10 @@ from .models import ArtanKiloDoz
 from .serializers import ArtanKiloDozSerializers
 
 
-class ArtanKiloDozViewSet(viewsets.ModelViewSet):
+class ArtanKiloDozViewSet(viewsets.ModelViewSet,BaseOlcekHesaplayici):
     queryset = ArtanKiloDoz.objects.all().order_by('id')
     serializer_class = ArtanKiloDozSerializers
 
-    KASIK_OLCEGI_ML = Decimal('5')
-
-    def olcek_formatla(self, olcek_sayisi):
-        tam_olcek = int(olcek_sayisi)
-        kalan = olcek_sayisi - tam_olcek
-
-        if tam_olcek == 0:
-            if kalan >= Decimal('0.875') and kalan < Decimal('1'):
-                return "1 ölçek"
-            elif kalan > Decimal('0.75') and kalan < Decimal('0.875'):
-                return "3/4 ölçek"
-            elif kalan == Decimal('0.75'):
-                return "3/4 ölçek"
-            elif kalan >= Decimal('0.625') and kalan < Decimal('0.75'):
-                return "3/4 ölçek"
-            elif kalan > Decimal('0.50') and kalan < Decimal('0.625'):
-                return "1/2 ölçek"
-            elif kalan == Decimal('0.50'):
-                return "1/2 ölçek"
-            elif kalan >= Decimal('0.375') and kalan < Decimal('0.50'):
-                return "1/2 ölçek"
-            elif kalan > Decimal('0.25') and kalan < Decimal('0.375'):
-                return "1/4 ölçek"
-            elif kalan == Decimal('0.25'):
-                return "1/4 ölçek"
-            elif kalan >= Decimal('0.125') and kalan < Decimal('0.25'):
-                return "1/4 ölçek"
-            elif kalan > Decimal('0') and kalan < Decimal('0.125'):
-                return "1/4 ölçek"
-            else:
-                return "0 ölçek"
-        else:
-            if kalan >= Decimal('0.875') and kalan < Decimal('1'):
-                return f"{tam_olcek + 1}  ölçek"
-            elif kalan > Decimal('0.75') and kalan < Decimal('0.875'):
-                return f"{tam_olcek} + 3/4 ölçek"
-            elif kalan == Decimal('0.75'):
-                return f"{tam_olcek} + 3/4 ölçek"
-            elif kalan >= Decimal('0.625') and kalan < Decimal('0.75'):
-                return f"{tam_olcek} + 3/4 ölçek"
-            elif kalan > Decimal('0.50') and kalan < Decimal('0.625'):
-                return f"{tam_olcek} + 1/2 ölçek"
-            elif kalan == Decimal('0.50'):
-                return f"{tam_olcek} + 1/2 ölçek"
-            elif kalan >= Decimal('0.375') and kalan < Decimal('0.50'):
-                return f"{tam_olcek} + 1/2 ölçek"
-            elif kalan > Decimal('0.25') and kalan < Decimal('0.375'):
-                return f"{tam_olcek} + 1/4 ölçek"
-            elif kalan == Decimal('0.25'):
-                return f"{tam_olcek} + 1/4 ölçek"
-            elif kalan >= Decimal('0.125') and kalan < Decimal('0.25'):
-                return f"{tam_olcek} + 1/4 ölçek"
-            elif kalan > Decimal('0') and kalan < Decimal('0.125'):
-                return f"{tam_olcek} ölçek"
-            else:
-                return f"{tam_olcek} ölçek"
 
     @action(detail=False, methods=['get'], url_path='get-artan-doz-kilo')
     def get_artan_doz_kilo(self, request):
@@ -1414,35 +1383,51 @@ class ArtanKiloDozViewSet(viewsets.ModelViewSet):
             return Response({'error': 'Kilo değeri geçersiz'}, status=status.HTTP_400_BAD_REQUEST)
 
         if kilodoz.threshold_weight < kilo:
-            tipik_min_doz = kilodoz.tipik_min_doz or Decimal('0')
+            tipik_min_doz = kilodoz.tipik_min_doz
             tipik_max_doz = kilodoz.tipik_max_doz
             maksimum_anlik_doz = kilodoz.maksimum_anlik_doz or Decimal('0')
 
-            if tipik_max_doz is None:
-                # Only minimum dose calculation
-                min_doz = kilo * tipik_min_doz
-                min_kasik = (min_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-                min_kasik_mesaj = self.olcek_formatla(min_kasik)
-                doz_message = f"{min_kasik_mesaj} kullanın."
-            else:
-                min_doz = kilo * tipik_min_doz
-                maks_doz = kilo * tipik_max_doz
+            min_doz = kilo * tipik_min_doz
 
-                if min_doz > maksimum_anlik_doz or maks_doz > maksimum_anlik_doz:
-                    maks_kasik = (maksimum_anlik_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'),
-                                                                                      rounding=ROUND_HALF_UP)
-                    maks_kasik_mesaj = self.olcek_formatla(maks_kasik)
-                    doz_message = f"{maks_kasik_mesaj} kullanın."
-                else:
+            if tipik_max_doz is None:
+                # `tipik_max_doz` değeri yoksa sadece minimum doz üzerinden hesapla
+                if kilodoz.ilac.ilac_kategori.id in self.SPOON_ACCOUNTING_CATEGORIES:
                     min_kasik = (min_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
                     min_kasik_mesaj = self.olcek_formatla(min_kasik)
-                    maks_kasik = (maks_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-                    maks_kasik_mesaj = self.olcek_formatla(maks_kasik)
+                    doz_message = f"{min_kasik_mesaj} kullanın."
+                else:
+                    doz_message = f"{min_doz} ml kullanın."
+            else:
+                # `tipik_max_doz` mevcutsa maksimum doz hesaplama
+                maks_doz = kilo * tipik_max_doz
 
-                    if min_kasik_mesaj == maks_kasik_mesaj:
-                        doz_message = f"{min_kasik_mesaj} kullanın."
+                # Eğer minimum doz veya maksimum doz, maksimum anlık dozu geçiyorsa
+                if min_doz > maksimum_anlik_doz or maks_doz > maksimum_anlik_doz:
+                    # Maksimum anlık doza göre hesapla
+                    if kilodoz.ilac.ilac_kategori.id in self.SPOON_ACCOUNTING_CATEGORIES:
+                        maks_kasik = (maksimum_anlik_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'),
+                                                                                          rounding=ROUND_HALF_UP)
+                        maks_kasik_mesaj = self.olcek_formatla(maks_kasik)
+                        doz_message = f"{maks_kasik_mesaj} kullanın."
                     else:
-                        doz_message = f"{min_kasik_mesaj} veya {maks_kasik_mesaj} kullanın."
+                        doz_message = f"{maksimum_anlik_doz} ml kullanın."
+                else:
+                    if kilodoz.ilac.ilac_kategori.id in self.SPOON_ACCOUNTING_CATEGORIES:
+                        # Kaşık ölçüsüne göre min doz hesaplama
+                        min_kasik = (min_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                        min_kasik_mesaj = self.olcek_formatla(min_kasik)
+
+                        # Maksimum doz hesaplama
+                        maks_kasik = (maks_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                        maks_kasik_mesaj = self.olcek_formatla(maks_kasik)
+
+                        # Eğer minimum ve maksimum ölçü aynıysa, tek mesaj göster
+                        if min_kasik_mesaj == maks_kasik_mesaj:
+                            doz_message = f"{min_kasik_mesaj} kullanın."
+                        else:
+                            doz_message = f"{min_kasik_mesaj} veya {maks_kasik_mesaj} kullanın."
+                    else:
+                        doz_message = f"{min_doz} ml  veya {maks_doz} ml kullanın."
 
             response_data = {
                 'message': doz_message,
@@ -1455,20 +1440,26 @@ class ArtanKiloDozViewSet(viewsets.ModelViewSet):
             maks_doz = kilodoz.threshold_weight_max_dose
 
 
-            min_kasik = (min_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-            min_kasik_mesaj = self.olcek_formatla(min_kasik)
-
-
             if maks_doz is None:
-                doz_message = f"{min_kasik_mesaj} kullanın."
-            else:
-                maks_kasik = (maks_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-                maks_kasik_mesaj = self.olcek_formatla(maks_kasik)
-
-                if min_kasik_mesaj == maks_kasik_mesaj:
+                if kilodoz.ilac.ilac_kategori.id in self.SPOON_ACCOUNTING_CATEGORIES:
+                    min_kasik = (min_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                    min_kasik_mesaj = self.olcek_formatla(min_kasik)
                     doz_message = f"{min_kasik_mesaj} kullanın."
                 else:
-                    doz_message = f"{min_kasik_mesaj} veya {maks_kasik_mesaj} kullanın."
+                    doz_message = f"{min_doz} ml kullanın."
+            else:
+                if kilodoz.ilac.ilac_kategori.id in self.SPOON_ACCOUNTING_CATEGORIES:
+                    min_kasik = (min_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                    min_kasik_mesaj = self.olcek_formatla(min_kasik)
+                    maks_kasik = (maks_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                    maks_kasik_mesaj = self.olcek_formatla(maks_kasik)
+
+                    if min_kasik_mesaj == maks_kasik_mesaj:
+                        doz_message = f"{min_kasik_mesaj} kullanın."
+                    else:
+                        doz_message = f"{min_kasik_mesaj} veya {maks_kasik_mesaj} kullanın."
+                else:
+                    doz_message = f"{min_doz} ml  veya {maks_doz} ml kullanın."
 
             response_data = {
                 'message': doz_message,
@@ -1592,66 +1583,10 @@ from .models import AzalanKiloDoz
 from .serializers import AzalanKiloDozSerializers
 
 
-class AzalanKiloDozViewSet(viewsets.ModelViewSet):
+class AzalanKiloDozViewSet(viewsets.ModelViewSet,BaseOlcekHesaplayici):
     queryset = AzalanKiloDoz.objects.all().order_by('id')
     serializer_class = AzalanKiloDozSerializers
 
-    KASIK_OLCEGI_ML = Decimal('5')
-
-    def olcek_formatla(self, olcek_sayisi):
-        tam_olcek = int(olcek_sayisi)
-        kalan = olcek_sayisi - tam_olcek
-
-        if tam_olcek == 0:
-            if kalan >= Decimal('0.875') and kalan < Decimal('1'):
-                return "1 ölçek"
-            elif kalan > Decimal('0.75') and kalan < Decimal('0.875'):
-                return "3/4 ölçek"
-            elif kalan == Decimal('0.75'):
-                return "3/4 ölçek"
-            elif kalan >= Decimal('0.625') and kalan < Decimal('0.75'):
-                return "3/4 ölçek"
-            elif kalan > Decimal('0.50') and kalan < Decimal('0.625'):
-                return "1/2 ölçek"
-            elif kalan == Decimal('0.50'):
-                return "1/2 ölçek"
-            elif kalan >= Decimal('0.375') and kalan < Decimal('0.50'):
-                return "1/2 ölçek"
-            elif kalan > Decimal('0.25') and kalan < Decimal('0.375'):
-                return "1/4 ölçek"
-            elif kalan == Decimal('0.25'):
-                return "1/4 ölçek"
-            elif kalan >= Decimal('0.125') and kalan < Decimal('0.25'):
-                return "1/4 ölçek"
-            elif kalan > Decimal('0') and kalan < Decimal('0.125'):
-                return "1/4 ölçek"
-            else:
-                return "0 ölçek"
-        else:
-            if kalan >= Decimal('0.875') and kalan < Decimal('1'):
-                return f"{tam_olcek + 1}  ölçek"
-            elif kalan > Decimal('0.75') and kalan < Decimal('0.875'):
-                return f"{tam_olcek} + 3/4 ölçek"
-            elif kalan == Decimal('0.75'):
-                return f"{tam_olcek} + 3/4 ölçek"
-            elif kalan >= Decimal('0.625') and kalan < Decimal('0.75'):
-                return f"{tam_olcek} + 3/4 ölçek"
-            elif kalan > Decimal('0.50') and kalan < Decimal('0.625'):
-                return f"{tam_olcek} + 1/2 ölçek"
-            elif kalan == Decimal('0.50'):
-                return f"{tam_olcek} + 1/2 ölçek"
-            elif kalan >= Decimal('0.375') and kalan < Decimal('0.50'):
-                return f"{tam_olcek} + 1/2 ölçek"
-            elif kalan > Decimal('0.25') and kalan < Decimal('0.375'):
-                return f"{tam_olcek} + 1/4 ölçek"
-            elif kalan == Decimal('0.25'):
-                return f"{tam_olcek} + 1/4 ölçek"
-            elif kalan >= Decimal('0.125') and kalan < Decimal('0.25'):
-                return f"{tam_olcek} + 1/4 ölçek"
-            elif kalan > Decimal('0') and kalan < Decimal('0.125'):
-                return f"{tam_olcek} ölçek"
-            else:
-                return f"{tam_olcek} ölçek"
 
     @action(detail=False, methods=['get'], url_path='get-azalan-doz-kilo')
     def get_azalan_doz_kilo(self, request):
@@ -1678,25 +1613,30 @@ class AzalanKiloDozViewSet(viewsets.ModelViewSet):
             tipik_min_doz = kilodoz.tipik_min_doz or Decimal('0')
             tipik_max_doz = kilodoz.tipik_max_doz
 
+            min_doz = kilo * tipik_min_doz
+
             if tipik_max_doz is None:
                 # Only minimum dose calculation
-                min_doz = kilo * tipik_min_doz
-                min_kasik = (min_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-                min_kasik_mesaj = self.olcek_formatla(min_kasik)
-                doz_message = f"{min_kasik_mesaj} kullanın."
-            else:
-                min_doz = kilo * tipik_min_doz
-                maks_doz = kilo * tipik_max_doz
-
-                min_kasik = (min_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-                min_kasik_mesaj = self.olcek_formatla(min_kasik)
-                maks_kasik = (maks_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-                maks_kasik_mesaj = self.olcek_formatla(maks_kasik)
-
-                if min_kasik_mesaj == maks_kasik_mesaj:
+                if kilodoz.ilac.ilac_kategori.id in self.SPOON_ACCOUNTING_CATEGORIES:
+                    min_kasik = (min_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                    min_kasik_mesaj = self.olcek_formatla(min_kasik)
                     doz_message = f"{min_kasik_mesaj} kullanın."
                 else:
-                    doz_message = f"{min_kasik_mesaj} veya {maks_kasik_mesaj} kullanın."
+                    doz_message = f"{min_doz} ml kullanın."
+            else:
+                maks_doz = kilo * tipik_max_doz
+                if kilodoz.ilac.ilac_kategori.id in self.SPOON_ACCOUNTING_CATEGORIES:
+                    min_kasik = (min_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                    min_kasik_mesaj = self.olcek_formatla(min_kasik)
+                    maks_kasik = (maks_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                    maks_kasik_mesaj = self.olcek_formatla(maks_kasik)
+
+                    if min_kasik_mesaj == maks_kasik_mesaj:
+                        doz_message = f"{min_kasik_mesaj} kullanın."
+                    else:
+                        doz_message = f"{min_kasik_mesaj} veya {maks_kasik_mesaj} kullanın."
+                else:
+                    doz_message = f"{min_doz} ml veya {maks_doz} ml kullanın."
 
             response_data = {
                 'message': doz_message,
@@ -1707,19 +1647,26 @@ class AzalanKiloDozViewSet(viewsets.ModelViewSet):
             min_doz = kilodoz.threshold_weight_min_dose
             maks_doz = kilodoz.threshold_weight_max_dose
 
-            min_kasik = (min_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-            min_kasik_mesaj = self.olcek_formatla(min_kasik)
-
             if maks_doz is None:
-                doz_message = f"{min_kasik_mesaj} kullanın."
-            else:
-                maks_kasik = (maks_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-                maks_kasik_mesaj = self.olcek_formatla(maks_kasik)
-
-                if min_kasik_mesaj == maks_kasik_mesaj:
+                if kilodoz.ilac.ilac_kategori.id in self.SPOON_ACCOUNTING_CATEGORIES:
+                    min_kasik = (min_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                    min_kasik_mesaj = self.olcek_formatla(min_kasik)
                     doz_message = f"{min_kasik_mesaj} kullanın."
                 else:
-                    doz_message = f"{min_kasik_mesaj} veya {maks_kasik_mesaj} kullanın."
+                    doz_message = f"{min_doz} ml kullanın."
+            else:
+                if kilodoz.ilac.ilac_kategori.id in self.SPOON_ACCOUNTING_CATEGORIES:
+                    min_kasik = (min_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                    min_kasik_mesaj = self.olcek_formatla(min_kasik)
+                    maks_kasik = (maks_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                    maks_kasik_mesaj = self.olcek_formatla(maks_kasik)
+
+                    if min_kasik_mesaj == maks_kasik_mesaj:
+                        doz_message = f"{min_kasik_mesaj} kullanın."
+                    else:
+                        doz_message = f"{min_kasik_mesaj} veya {maks_kasik_mesaj} kullanın."
+                else:
+                    doz_message = f"{min_doz} ml veya {maks_doz} ml kullanın."
 
             response_data = {
                 'message': doz_message,
@@ -1835,66 +1782,9 @@ from .models import HastalikArtanKiloDoz
 from .serializers import HastalikArtanKiloDozSerializers
 
 
-class HastalikArtanKiloDozViewSet(viewsets.ModelViewSet):
+class HastalikArtanKiloDozViewSet(viewsets.ModelViewSet,BaseOlcekHesaplayici):
     queryset = HastalikArtanKiloDoz.objects.all().order_by('id')
     serializer_class = HastalikArtanKiloDozSerializers
-
-    KASIK_OLCEGI_ML = Decimal('5')
-
-    def olcek_formatla(self, olcek_sayisi):
-        tam_olcek = int(olcek_sayisi)
-        kalan = olcek_sayisi - tam_olcek
-
-        if tam_olcek == 0:
-            if kalan >= Decimal('0.875') and kalan < Decimal('1'):
-                return "1 ölçek"
-            elif kalan > Decimal('0.75') and kalan < Decimal('0.875'):
-                return "3/4 ölçek"
-            elif kalan == Decimal('0.75'):
-                return "3/4 ölçek"
-            elif kalan >= Decimal('0.625') and kalan < Decimal('0.75'):
-                return "3/4 ölçek"
-            elif kalan > Decimal('0.50') and kalan < Decimal('0.625'):
-                return "1/2 ölçek"
-            elif kalan == Decimal('0.50'):
-                return "1/2 ölçek"
-            elif kalan >= Decimal('0.375') and kalan < Decimal('0.50'):
-                return "1/2 ölçek"
-            elif kalan > Decimal('0.25') and kalan < Decimal('0.375'):
-                return "1/4 ölçek"
-            elif kalan == Decimal('0.25'):
-                return "1/4 ölçek"
-            elif kalan >= Decimal('0.125') and kalan < Decimal('0.25'):
-                return "1/4 ölçek"
-            elif kalan > Decimal('0') and kalan < Decimal('0.125'):
-                return "1/4 ölçek"
-            else:
-                return "0 ölçek"
-        else:
-            if kalan >= Decimal('0.875') and kalan < Decimal('1'):
-                return f"{tam_olcek + 1}  ölçek"
-            elif kalan > Decimal('0.75') and kalan < Decimal('0.875'):
-                return f"{tam_olcek} + 3/4 ölçek"
-            elif kalan == Decimal('0.75'):
-                return f"{tam_olcek} + 3/4 ölçek"
-            elif kalan >= Decimal('0.625') and kalan < Decimal('0.75'):
-                return f"{tam_olcek} + 3/4 ölçek"
-            elif kalan > Decimal('0.50') and kalan < Decimal('0.625'):
-                return f"{tam_olcek} + 1/2 ölçek"
-            elif kalan == Decimal('0.50'):
-                return f"{tam_olcek} + 1/2 ölçek"
-            elif kalan >= Decimal('0.375') and kalan < Decimal('0.50'):
-                return f"{tam_olcek} + 1/2 ölçek"
-            elif kalan > Decimal('0.25') and kalan < Decimal('0.375'):
-                return f"{tam_olcek} + 1/4 ölçek"
-            elif kalan == Decimal('0.25'):
-                return f"{tam_olcek} + 1/4 ölçek"
-            elif kalan >= Decimal('0.125') and kalan < Decimal('0.25'):
-                return f"{tam_olcek} + 1/4 ölçek"
-            elif kalan > Decimal('0') and kalan < Decimal('0.125'):
-                return f"{tam_olcek} ölçek"
-            else:
-                return f"{tam_olcek} ölçek"
 
     @action(detail=False, methods=['get'], url_path='get-hastalik-artan-doz-kilo')
     def get_hastalik_artan_doz_kilo(self, request):
@@ -1927,31 +1817,42 @@ class HastalikArtanKiloDozViewSet(viewsets.ModelViewSet):
             tipik_max_doz = kilodoz.tipik_max_doz
             maksimum_anlik_doz = kilodoz.maksimum_anlik_doz or Decimal('0')
 
+            min_doz = kilo * tipik_min_doz
+
             if tipik_max_doz is None:
                 # Only minimum dose calculation
-                min_doz = kilo * tipik_min_doz
-                min_kasik = (min_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-                min_kasik_mesaj = self.olcek_formatla(min_kasik)
-                doz_message = f"{min_kasik_mesaj} kullanın."
+                if kilodoz.ilac.ilac_kategori.id in self.SPOON_ACCOUNTING_CATEGORIES:
+                    min_kasik = (min_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                    min_kasik_mesaj = self.olcek_formatla(min_kasik)
+                    doz_message = f"{min_kasik_mesaj} kullanın."
+                else:
+                    doz_message = f"{min_doz} ml kullanın."
             else:
-                min_doz = kilo * tipik_min_doz
                 maks_doz = kilo * tipik_max_doz
 
                 if min_doz > maksimum_anlik_doz or maks_doz > maksimum_anlik_doz:
-                    maks_kasik = (maksimum_anlik_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'),
-                                                                                      rounding=ROUND_HALF_UP)
-                    maks_kasik_mesaj = self.olcek_formatla(maks_kasik)
-                    doz_message = f"{maks_kasik_mesaj} kullanın."
-                else:
-                    min_kasik = (min_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-                    min_kasik_mesaj = self.olcek_formatla(min_kasik)
-                    maks_kasik = (maks_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-                    maks_kasik_mesaj = self.olcek_formatla(maks_kasik)
-
-                    if min_kasik_mesaj == maks_kasik_mesaj:
-                        doz_message = f"{min_kasik_mesaj} kullanın."
+                    if kilodoz.ilac.ilac_kategori.id in self.SPOON_ACCOUNTING_CATEGORIES:
+                        maks_kasik = (maksimum_anlik_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                        maks_kasik_mesaj = self.olcek_formatla(maks_kasik)
+                        doz_message = f"{maks_kasik_mesaj} kullanın."
                     else:
-                        doz_message = f"{min_kasik_mesaj} veya {maks_kasik_mesaj} kullanın."
+                        doz_message = f"{maksimum_anlik_doz} kullanın."
+
+                else:
+                    if kilodoz.ilac.ilac_kategori.id in self.SPOON_ACCOUNTING_CATEGORIES:
+                        min_kasik = (min_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                        min_kasik_mesaj = self.olcek_formatla(min_kasik)
+                        maks_kasik = (maks_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                        maks_kasik_mesaj = self.olcek_formatla(maks_kasik)
+
+                        if min_kasik_mesaj == maks_kasik_mesaj:
+                            doz_message = f"{min_kasik_mesaj} kullanın."
+                        else:
+                            doz_message = f"{min_kasik_mesaj} veya {maks_kasik_mesaj} kullanın."
+                    else:
+                            doz_message = f"{min_doz} ml veya {maks_doz} ml kullanın."
+
+
 
             response_data = {
                 'message': doz_message,
@@ -1964,20 +1865,26 @@ class HastalikArtanKiloDozViewSet(viewsets.ModelViewSet):
             maks_doz = kilodoz.threshold_weight_max_dose
 
 
-            min_kasik = (min_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-            min_kasik_mesaj = self.olcek_formatla(min_kasik)
-
-
             if maks_doz is None:
-                doz_message = f"{min_kasik_mesaj} kullanın."
-            else:
-                maks_kasik = (maks_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-                maks_kasik_mesaj = self.olcek_formatla(maks_kasik)
-
-                if min_kasik_mesaj == maks_kasik_mesaj:
+                if kilodoz.ilac.ilac_kategori.id in self.SPOON_ACCOUNTING_CATEGORIES:
+                    min_kasik = (min_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                    min_kasik_mesaj = self.olcek_formatla(min_kasik)
                     doz_message = f"{min_kasik_mesaj} kullanın."
                 else:
-                    doz_message = f"{min_kasik_mesaj} veya {maks_kasik_mesaj} kullanın."
+                    doz_message = f"{min_doz} ml kullanın."
+            else:
+                if kilodoz.ilac.ilac_kategori.id in self.SPOON_ACCOUNTING_CATEGORIES:
+                    min_kasik = (min_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                    min_kasik_mesaj = self.olcek_formatla(min_kasik)
+                    maks_kasik = (maks_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                    maks_kasik_mesaj = self.olcek_formatla(maks_kasik)
+
+                    if min_kasik_mesaj == maks_kasik_mesaj:
+                        doz_message = f"{min_kasik_mesaj} kullanın."
+                    else:
+                        doz_message = f"{min_kasik_mesaj} veya {maks_kasik_mesaj} kullanın."
+                else:
+                    doz_message = f"{min_doz} ml veya {maks_doz} ml kullanın."
 
             response_data = {
                 'message': doz_message,
@@ -2104,67 +2011,10 @@ class HastalikArtanKiloDozViewSet(viewsets.ModelViewSet):
 from .models import HastalikAzalanKiloDoz
 from .serializers import HastalikAzalanKiloDozSerializers
 
-
-class HastalikAzalanKiloDozViewSet(viewsets.ModelViewSet):
+# burdan devam et
+class HastalikAzalanKiloDozViewSet(viewsets.ModelViewSet,BaseOlcekHesaplayici):
     queryset = HastalikAzalanKiloDoz.objects.all().order_by('id')
     serializer_class = HastalikAzalanKiloDozSerializers
-
-    KASIK_OLCEGI_ML = Decimal('5')
-
-    def olcek_formatla(self, olcek_sayisi):
-        tam_olcek = int(olcek_sayisi)
-        kalan = olcek_sayisi - tam_olcek
-
-        if tam_olcek == 0:
-            if kalan >= Decimal('0.875') and kalan < Decimal('1'):
-                return "1 ölçek"
-            elif kalan > Decimal('0.75') and kalan < Decimal('0.875'):
-                return "3/4 ölçek"
-            elif kalan == Decimal('0.75'):
-                return "3/4 ölçek"
-            elif kalan >= Decimal('0.625') and kalan < Decimal('0.75'):
-                return "3/4 ölçek"
-            elif kalan > Decimal('0.50') and kalan < Decimal('0.625'):
-                return "1/2 ölçek"
-            elif kalan == Decimal('0.50'):
-                return "1/2 ölçek"
-            elif kalan >= Decimal('0.375') and kalan < Decimal('0.50'):
-                return "1/2 ölçek"
-            elif kalan > Decimal('0.25') and kalan < Decimal('0.375'):
-                return "1/4 ölçek"
-            elif kalan == Decimal('0.25'):
-                return "1/4 ölçek"
-            elif kalan >= Decimal('0.125') and kalan < Decimal('0.25'):
-                return "1/4 ölçek"
-            elif kalan > Decimal('0') and kalan < Decimal('0.125'):
-                return "1/4 ölçek"
-            else:
-                return "0 ölçek"
-        else:
-            if kalan >= Decimal('0.875') and kalan < Decimal('1'):
-                return f"{tam_olcek + 1}  ölçek"
-            elif kalan > Decimal('0.75') and kalan < Decimal('0.875'):
-                return f"{tam_olcek} + 3/4 ölçek"
-            elif kalan == Decimal('0.75'):
-                return f"{tam_olcek} + 3/4 ölçek"
-            elif kalan >= Decimal('0.625') and kalan < Decimal('0.75'):
-                return f"{tam_olcek} + 3/4 ölçek"
-            elif kalan > Decimal('0.50') and kalan < Decimal('0.625'):
-                return f"{tam_olcek} + 1/2 ölçek"
-            elif kalan == Decimal('0.50'):
-                return f"{tam_olcek} + 1/2 ölçek"
-            elif kalan >= Decimal('0.375') and kalan < Decimal('0.50'):
-                return f"{tam_olcek} + 1/2 ölçek"
-            elif kalan > Decimal('0.25') and kalan < Decimal('0.375'):
-                return f"{tam_olcek} + 1/4 ölçek"
-            elif kalan == Decimal('0.25'):
-                return f"{tam_olcek} + 1/4 ölçek"
-            elif kalan >= Decimal('0.125') and kalan < Decimal('0.25'):
-                return f"{tam_olcek} + 1/4 ölçek"
-            elif kalan > Decimal('0') and kalan < Decimal('0.125'):
-                return f"{tam_olcek} ölçek"
-            else:
-                return f"{tam_olcek} ölçek"
 
     @action(detail=False, methods=['get'], url_path='get-hastalik-azalan-doz-kilo')
     def get_hastalik_azalan_doz_kilo(self, request):
@@ -2195,26 +2045,30 @@ class HastalikAzalanKiloDozViewSet(viewsets.ModelViewSet):
             tipik_min_doz = kilodoz.tipik_min_doz or Decimal('0')
             tipik_max_doz = kilodoz.tipik_max_doz
 
+            min_doz = kilo * tipik_min_doz
 
             if tipik_max_doz is None:
                 # Only minimum dose calculation
-                min_doz = kilo * tipik_min_doz
-                min_kasik = (min_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-                min_kasik_mesaj = self.olcek_formatla(min_kasik)
-                doz_message = f"{min_kasik_mesaj} kullanın."
-            else:
-                min_doz = kilo * tipik_min_doz
-                maks_doz = kilo * tipik_max_doz
-
-                min_kasik = (min_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-                min_kasik_mesaj = self.olcek_formatla(min_kasik)
-                maks_kasik = (maks_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-                maks_kasik_mesaj = self.olcek_formatla(maks_kasik)
-
-                if min_kasik_mesaj == maks_kasik_mesaj:
+                if kilodoz.ilac.ilac_kategori.id in self.SPOON_ACCOUNTING_CATEGORIES:
+                    min_kasik = (min_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                    min_kasik_mesaj = self.olcek_formatla(min_kasik)
                     doz_message = f"{min_kasik_mesaj} kullanın."
                 else:
-                    doz_message = f"{min_kasik_mesaj} veya {maks_kasik_mesaj} kullanın."
+                    doz_message = f"{min_doz} kullanın."
+            else:
+                maks_doz = kilo * tipik_max_doz
+                if kilodoz.ilac.ilac_kategori.id in self.SPOON_ACCOUNTING_CATEGORIES:
+                    min_kasik = (min_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                    min_kasik_mesaj = self.olcek_formatla(min_kasik)
+                    maks_kasik = (maks_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                    maks_kasik_mesaj = self.olcek_formatla(maks_kasik)
+
+                    if min_kasik_mesaj == maks_kasik_mesaj:
+                        doz_message = f"{min_kasik_mesaj} kullanın."
+                    else:
+                        doz_message = f"{min_kasik_mesaj} veya {maks_kasik_mesaj} kullanın."
+                else:
+                    doz_message = f"{min_doz} ml veya {maks_doz} ml kullanın."
 
             response_data = {
                 'message': doz_message,
@@ -2226,20 +2080,26 @@ class HastalikAzalanKiloDozViewSet(viewsets.ModelViewSet):
             maks_doz = kilodoz.threshold_weight_max_dose
 
 
-            min_kasik = (min_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-            min_kasik_mesaj = self.olcek_formatla(min_kasik)
-
-
             if maks_doz is None:
-                doz_message = f"{min_kasik_mesaj} kullanın."
-            else:
-                maks_kasik = (maks_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-                maks_kasik_mesaj = self.olcek_formatla(maks_kasik)
-
-                if min_kasik_mesaj == maks_kasik_mesaj:
+                if kilodoz.ilac.ilac_kategori.id in self.SPOON_ACCOUNTING_CATEGORIES:
+                    min_kasik = (min_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                    min_kasik_mesaj = self.olcek_formatla(min_kasik)
                     doz_message = f"{min_kasik_mesaj} kullanın."
                 else:
-                    doz_message = f"{min_kasik_mesaj} veya {maks_kasik_mesaj} kullanın."
+                    doz_message = f"{min_doz} ml kullanın."
+            else:
+                if kilodoz.ilac.ilac_kategori.id in self.SPOON_ACCOUNTING_CATEGORIES:
+                    min_kasik = (min_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                    min_kasik_mesaj = self.olcek_formatla(min_kasik)
+                    maks_kasik = (maks_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                    maks_kasik_mesaj = self.olcek_formatla(maks_kasik)
+
+                    if min_kasik_mesaj == maks_kasik_mesaj:
+                        doz_message = f"{min_kasik_mesaj} kullanın."
+                    else:
+                        doz_message = f"{min_kasik_mesaj} veya {maks_kasik_mesaj} kullanın."
+                else:
+                    doz_message = f"{min_doz} ml veya {maks_doz} ml kullanın."
 
             response_data = {
                 'message': doz_message,
@@ -2358,66 +2218,10 @@ from .models import HastalikHemYasaHemKiloyaBagliArtanDoz
 from .serializers import HastalikHemYasaHemKiloyaBagliArtanDozSerializers
 
 
-class HastalikHemYasaHemKiloyaBagliArtanDozViewSet(viewsets.ModelViewSet):
+class HastalikHemYasaHemKiloyaBagliArtanDozViewSet(viewsets.ModelViewSet,BaseOlcekHesaplayici):
     queryset = HastalikHemYasaHemKiloyaBagliArtanDoz.objects.all().order_by('id')
     serializer_class = HastalikHemYasaHemKiloyaBagliArtanDozSerializers
 
-    KASIK_OLCEGI_ML = Decimal('5')
-
-    def olcek_formatla(self, olcek_sayisi):
-        tam_olcek = int(olcek_sayisi)
-        kalan = olcek_sayisi - tam_olcek
-
-        if tam_olcek == 0:
-            if kalan >= Decimal('0.875') and kalan < Decimal('1'):
-                return "1 ölçek"
-            elif kalan > Decimal('0.75') and kalan < Decimal('0.875'):
-                return "3/4 ölçek"
-            elif kalan == Decimal('0.75'):
-                return "3/4 ölçek"
-            elif kalan >= Decimal('0.625') and kalan < Decimal('0.75'):
-                return "3/4 ölçek"
-            elif kalan > Decimal('0.50') and kalan < Decimal('0.625'):
-                return "1/2 ölçek"
-            elif kalan == Decimal('0.50'):
-                return "1/2 ölçek"
-            elif kalan >= Decimal('0.375') and kalan < Decimal('0.50'):
-                return "1/2 ölçek"
-            elif kalan > Decimal('0.25') and kalan < Decimal('0.375'):
-                return "1/4 ölçek"
-            elif kalan == Decimal('0.25'):
-                return "1/4 ölçek"
-            elif kalan >= Decimal('0.125') and kalan < Decimal('0.25'):
-                return "1/4 ölçek"
-            elif kalan > Decimal('0') and kalan < Decimal('0.125'):
-                return "1/4 ölçek"
-            else:
-                return "0 ölçek"
-        else:
-            if kalan >= Decimal('0.875') and kalan < Decimal('1'):
-                return f"{tam_olcek + 1}  ölçek"
-            elif kalan > Decimal('0.75') and kalan < Decimal('0.875'):
-                return f"{tam_olcek} + 3/4 ölçek"
-            elif kalan == Decimal('0.75'):
-                return f"{tam_olcek} + 3/4 ölçek"
-            elif kalan >= Decimal('0.625') and kalan < Decimal('0.75'):
-                return f"{tam_olcek} + 3/4 ölçek"
-            elif kalan > Decimal('0.50') and kalan < Decimal('0.625'):
-                return f"{tam_olcek} + 1/2 ölçek"
-            elif kalan == Decimal('0.50'):
-                return f"{tam_olcek} + 1/2 ölçek"
-            elif kalan >= Decimal('0.375') and kalan < Decimal('0.50'):
-                return f"{tam_olcek} + 1/2 ölçek"
-            elif kalan > Decimal('0.25') and kalan < Decimal('0.375'):
-                return f"{tam_olcek} + 1/4 ölçek"
-            elif kalan == Decimal('0.25'):
-                return f"{tam_olcek} + 1/4 ölçek"
-            elif kalan >= Decimal('0.125') and kalan < Decimal('0.25'):
-                return f"{tam_olcek} + 1/4 ölçek"
-            elif kalan > Decimal('0') and kalan < Decimal('0.125'):
-                return f"{tam_olcek} ölçek"
-            else:
-                return f"{tam_olcek} ölçek"
 
     @action(detail=False, methods=['get'], url_path='get-hastalik-artan-doz-hem-kilo-hem-yas')
     def get_hastalik_artan_doz_hem_kilo_hem_yas(self, request):
@@ -2459,31 +2263,39 @@ class HastalikHemYasaHemKiloyaBagliArtanDozViewSet(viewsets.ModelViewSet):
             tipik_max_doz = kilodoz.tipik_max_doz
             maksimum_anlik_doz = kilodoz.maksimum_anlik_doz or Decimal('0')
 
+            min_doz = kilo * tipik_min_doz
+
             if tipik_max_doz is None:
                 # Only minimum dose calculation
-                min_doz = kilo * tipik_min_doz
-                min_kasik = (min_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-                min_kasik_mesaj = self.olcek_formatla(min_kasik)
-                doz_message = f"{min_kasik_mesaj} kullanın."
+                if kilodoz.ilac.ilac_kategori.id in self.SPOON_ACCOUNTING_CATEGORIES:
+                    min_kasik = (min_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                    min_kasik_mesaj = self.olcek_formatla(min_kasik)
+                    doz_message = f"{min_kasik_mesaj} kullanın."
+                else:
+                    doz_message = f"{min_doz} ml kullanın."
             else:
-                min_doz = kilo * tipik_min_doz
                 maks_doz = kilo * tipik_max_doz
 
                 if min_doz > maksimum_anlik_doz or maks_doz > maksimum_anlik_doz:
-                    maks_kasik = (maksimum_anlik_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'),
-                                                                                      rounding=ROUND_HALF_UP)
-                    maks_kasik_mesaj = self.olcek_formatla(maks_kasik)
-                    doz_message = f"{maks_kasik_mesaj} kullanın."
-                else:
-                    min_kasik = (min_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-                    min_kasik_mesaj = self.olcek_formatla(min_kasik)
-                    maks_kasik = (maks_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-                    maks_kasik_mesaj = self.olcek_formatla(maks_kasik)
-
-                    if min_kasik_mesaj == maks_kasik_mesaj:
-                        doz_message = f"{min_kasik_mesaj} kullanın."
+                    if kilodoz.ilac.ilac_kategori.id in self.SPOON_ACCOUNTING_CATEGORIES:
+                        maks_kasik = (maksimum_anlik_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                        maks_kasik_mesaj = self.olcek_formatla(maks_kasik)
+                        doz_message = f"{maks_kasik_mesaj} kullanın."
                     else:
-                        doz_message = f"{min_kasik_mesaj} veya {maks_kasik_mesaj} kullanın."
+                        doz_message = f"{maksimum_anlik_doz} ml kullanın."
+                else:
+                    if kilodoz.ilac.ilac_kategori.id in self.SPOON_ACCOUNTING_CATEGORIES:
+                        min_kasik = (min_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                        min_kasik_mesaj = self.olcek_formatla(min_kasik)
+                        maks_kasik = (maks_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                        maks_kasik_mesaj = self.olcek_formatla(maks_kasik)
+
+                        if min_kasik_mesaj == maks_kasik_mesaj:
+                            doz_message = f"{min_kasik_mesaj} kullanın."
+                        else:
+                            doz_message = f"{min_kasik_mesaj} veya {maks_kasik_mesaj} kullanın."
+                    else:
+                        doz_message = f"{min_doz} ml veya {maks_doz} ml kullanın."
 
             response_data = {
                 'message': doz_message,
@@ -2495,21 +2307,26 @@ class HastalikHemYasaHemKiloyaBagliArtanDozViewSet(viewsets.ModelViewSet):
             min_doz = kilodoz.threshold_age_min_dose
             maks_doz = kilodoz.threshold_age_max_dose
 
-
-            min_kasik = (min_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-            min_kasik_mesaj = self.olcek_formatla(min_kasik)
-
-
             if maks_doz is None:
-                doz_message = f"{min_kasik_mesaj} kullanın."
-            else:
-                maks_kasik = (maks_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-                maks_kasik_mesaj = self.olcek_formatla(maks_kasik)
-
-                if min_kasik_mesaj == maks_kasik_mesaj:
+                if kilodoz.ilac.ilac_kategori.id in self.SPOON_ACCOUNTING_CATEGORIES:
+                    min_kasik = (min_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                    min_kasik_mesaj = self.olcek_formatla(min_kasik)
                     doz_message = f"{min_kasik_mesaj} kullanın."
                 else:
-                    doz_message = f"{min_kasik_mesaj} veya {maks_kasik_mesaj} kullanın."
+                    doz_message = f"{min_doz} ml kullanın."
+            else:
+                if kilodoz.ilac.ilac_kategori.id in self.SPOON_ACCOUNTING_CATEGORIES:
+                    min_kasik = (min_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                    min_kasik_mesaj = self.olcek_formatla(min_kasik)
+                    maks_kasik = (maks_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                    maks_kasik_mesaj = self.olcek_formatla(maks_kasik)
+
+                    if min_kasik_mesaj == maks_kasik_mesaj:
+                        doz_message = f"{min_kasik_mesaj} kullanın."
+                    else:
+                        doz_message = f"{min_kasik_mesaj} veya {maks_kasik_mesaj} kullanın."
+                else:
+                    doz_message = f"{min_doz} ml veya {maks_doz} ml kullanın."
 
             response_data = {
                 'message': doz_message,
@@ -2592,9 +2409,6 @@ class HastalikHemYasaHemKiloyaBagliArtanDozViewSet(viewsets.ModelViewSet):
 
 
 
-
-
-
                     check_uyari = row.get('Check Uyarı', '')
                     if pd.isna(check_uyari):
                         check_uyari = ''
@@ -2670,66 +2484,9 @@ from .models import HastalikHemYasaHemKiloyaBagliAzalanDoz
 from .serializers import HastalikHemYasaHemKiloyaBagliAzalanDozSerializers
 
 
-class HastalikHemYasaHemKiloyaBagliAzalanDozViewSet(viewsets.ModelViewSet):
+class HastalikHemYasaHemKiloyaBagliAzalanDozViewSet(viewsets.ModelViewSet,BaseOlcekHesaplayici):
     queryset = HastalikHemYasaHemKiloyaBagliAzalanDoz.objects.all().order_by('id')
     serializer_class = HastalikHemYasaHemKiloyaBagliAzalanDozSerializers
-
-    KASIK_OLCEGI_ML = Decimal('5')
-
-    def olcek_formatla(self, olcek_sayisi):
-        tam_olcek = int(olcek_sayisi)
-        kalan = olcek_sayisi - tam_olcek
-
-        if tam_olcek == 0:
-            if kalan >= Decimal('0.875') and kalan < Decimal('1'):
-                return "1 ölçek"
-            elif kalan > Decimal('0.75') and kalan < Decimal('0.875'):
-                return "3/4 ölçek"
-            elif kalan == Decimal('0.75'):
-                return "3/4 ölçek"
-            elif kalan >= Decimal('0.625') and kalan < Decimal('0.75'):
-                return "3/4 ölçek"
-            elif kalan > Decimal('0.50') and kalan < Decimal('0.625'):
-                return "1/2 ölçek"
-            elif kalan == Decimal('0.50'):
-                return "1/2 ölçek"
-            elif kalan >= Decimal('0.375') and kalan < Decimal('0.50'):
-                return "1/2 ölçek"
-            elif kalan > Decimal('0.25') and kalan < Decimal('0.375'):
-                return "1/4 ölçek"
-            elif kalan == Decimal('0.25'):
-                return "1/4 ölçek"
-            elif kalan >= Decimal('0.125') and kalan < Decimal('0.25'):
-                return "1/4 ölçek"
-            elif kalan > Decimal('0') and kalan < Decimal('0.125'):
-                return "1/4 ölçek"
-            else:
-                return "0 ölçek"
-        else:
-            if kalan >= Decimal('0.875') and kalan < Decimal('1'):
-                return f"{tam_olcek + 1}  ölçek"
-            elif kalan > Decimal('0.75') and kalan < Decimal('0.875'):
-                return f"{tam_olcek} + 3/4 ölçek"
-            elif kalan == Decimal('0.75'):
-                return f"{tam_olcek} + 3/4 ölçek"
-            elif kalan >= Decimal('0.625') and kalan < Decimal('0.75'):
-                return f"{tam_olcek} + 3/4 ölçek"
-            elif kalan > Decimal('0.50') and kalan < Decimal('0.625'):
-                return f"{tam_olcek} + 1/2 ölçek"
-            elif kalan == Decimal('0.50'):
-                return f"{tam_olcek} + 1/2 ölçek"
-            elif kalan >= Decimal('0.375') and kalan < Decimal('0.50'):
-                return f"{tam_olcek} + 1/2 ölçek"
-            elif kalan > Decimal('0.25') and kalan < Decimal('0.375'):
-                return f"{tam_olcek} + 1/4 ölçek"
-            elif kalan == Decimal('0.25'):
-                return f"{tam_olcek} + 1/4 ölçek"
-            elif kalan >= Decimal('0.125') and kalan < Decimal('0.25'):
-                return f"{tam_olcek} + 1/4 ölçek"
-            elif kalan > Decimal('0') and kalan < Decimal('0.125'):
-                return f"{tam_olcek} ölçek"
-            else:
-                return f"{tam_olcek} ölçek"
 
     @action(detail=False, methods=['get'], url_path='get-hastalik-azalan-doz-hem-kilo-hem-yas')
     def get_hastalik_azalan_doz_hem_kilo_hem_yas(self, request):
@@ -2774,24 +2531,29 @@ class HastalikHemYasaHemKiloyaBagliAzalanDozViewSet(viewsets.ModelViewSet):
 
             if tipik_max_doz is None:
                 # Only minimum dose calculation
-                min_doz = kilo * tipik_min_doz
-                min_kasik = (min_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-                min_kasik_mesaj = self.olcek_formatla(min_kasik)
-                doz_message = f"{min_kasik_mesaj} kullanın."
+                if kilodoz.ilac.ilac_kategori.id in self.SPOON_ACCOUNTING_CATEGORIES:
+                    min_doz = kilo * tipik_min_doz
+                    min_kasik = (min_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                    min_kasik_mesaj = self.olcek_formatla(min_kasik)
+                    doz_message = f"{min_kasik_mesaj} kullanın."
+                else:
+                    doz_message = f"{tipik_min_doz} ml kullanın."
             else:
                 min_doz = kilo * tipik_min_doz
                 maks_doz = kilo * tipik_max_doz
 
+                if kilodoz.ilac.ilac_kategori.id in self.SPOON_ACCOUNTING_CATEGORIES:
+                    min_kasik = (min_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                    min_kasik_mesaj = self.olcek_formatla(min_kasik)
+                    maks_kasik = (maks_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                    maks_kasik_mesaj = self.olcek_formatla(maks_kasik)
 
-                min_kasik = (min_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-                min_kasik_mesaj = self.olcek_formatla(min_kasik)
-                maks_kasik = (maks_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-                maks_kasik_mesaj = self.olcek_formatla(maks_kasik)
-
-                if min_kasik_mesaj == maks_kasik_mesaj:
-                    doz_message = f"{min_kasik_mesaj} kullanın."
+                    if min_kasik_mesaj == maks_kasik_mesaj:
+                        doz_message = f"{min_kasik_mesaj} kullanın."
+                    else:
+                        doz_message = f"{min_kasik_mesaj} veya {maks_kasik_mesaj} kullanın."
                 else:
-                    doz_message = f"{min_kasik_mesaj} veya {maks_kasik_mesaj} kullanın."
+                    doz_message = f"{min_doz} ml veya {maks_doz} ml kullanın."
 
             response_data = {
                 'message': doz_message,
@@ -2803,20 +2565,26 @@ class HastalikHemYasaHemKiloyaBagliAzalanDozViewSet(viewsets.ModelViewSet):
             maks_doz = kilodoz.threshold_age_max_dose
 
 
-            min_kasik = (min_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-            min_kasik_mesaj = self.olcek_formatla(min_kasik)
-
-
             if maks_doz is None:
-                doz_message = f"{min_kasik_mesaj} kullanın."
-            else:
-                maks_kasik = (maks_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-                maks_kasik_mesaj = self.olcek_formatla(maks_kasik)
-
-                if min_kasik_mesaj == maks_kasik_mesaj:
+                if kilodoz.ilac.ilac_kategori.id in self.SPOON_ACCOUNTING_CATEGORIES:
+                    min_kasik = (min_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                    min_kasik_mesaj = self.olcek_formatla(min_kasik)
                     doz_message = f"{min_kasik_mesaj} kullanın."
                 else:
-                    doz_message = f"{min_kasik_mesaj} veya {maks_kasik_mesaj} kullanın."
+                    doz_message = f"{min_doz} ml kullanın."
+            else:
+                if kilodoz.ilac.ilac_kategori.id in self.SPOON_ACCOUNTING_CATEGORIES:
+                    min_kasik = (min_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                    min_kasik_mesaj = self.olcek_formatla(min_kasik)
+                    maks_kasik = (maks_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                    maks_kasik_mesaj = self.olcek_formatla(maks_kasik)
+
+                    if min_kasik_mesaj == maks_kasik_mesaj:
+                        doz_message = f"{min_kasik_mesaj} kullanın."
+                    else:
+                        doz_message = f"{min_kasik_mesaj} veya {maks_kasik_mesaj} kullanın."
+                else:
+                    doz_message = f"{min_doz} ml veya {maks_doz} ml kullanın."
 
             response_data = {
                 'message': doz_message,
@@ -3176,29 +2944,24 @@ from django.core.cache import cache
 class CombinedView(APIView):
     def get(self, request):
         # Önbellekten verileri alıyoruz
-        combined_data = cache.get('combined_data')
 
-        if combined_data is None:
-            # Önbellekte yoksa veritabanından alıyoruz
-            products = Product.objects.all().values('id', 'name')
-            ilaclar = Ilac.objects.all().values('id', 'name', 'etken_madde')
+        products = Product.objects.all().values('id', 'name')
+        ilaclar = Ilac.objects.all().values('id', 'name', 'etken_madde')
 
-            # Tüm Product nesneleri için sayfa alanı 'besin takviyesi' olacak
-            product_list = list(products)
-            for product in product_list:
-                product['sayfa'] = 'besin takviyesi'
-                product['etken_madde'] = ''
+        # Tüm Product nesneleri için sayfa alanı 'besin takviyesi' olacak
+        product_list = list(products)
+        for product in product_list:
+            product['sayfa'] = 'besin takviyesi'
+            product['etken_madde'] = ''
 
-            # Tüm Ilac nesneleri için sayfa alanı 'ilac' olacak
-            ilac_list = list(ilaclar)
-            for ilac in ilac_list:
-                ilac['sayfa'] = 'ilac'
+        # Tüm Ilac nesneleri için sayfa alanı 'ilac' olacak
+        ilac_list = list(ilaclar)
+        for ilac in ilac_list:
+            ilac['sayfa'] = 'ilac'
 
-            # İki listeyi birleştiriyoruz
-            combined_data = product_list + ilac_list
+        # İki listeyi birleştiriyoruz
+        combined_data = product_list + ilac_list
 
-            # Verileri önbelleğe kaydediyoruz (sınırsız süre)
-            cache.set('combined_data', combined_data, timeout=None)  # Sınırsız süre
 
         # Response ile JSON formatında geri döndürüyoruz
         return Response(combined_data, status=status.HTTP_200_OK)

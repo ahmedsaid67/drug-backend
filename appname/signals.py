@@ -16,14 +16,14 @@ def create_user_profile(sender, instance, created, **kwargs):
         Profile.objects.create(user=instance)
 
 
-@receiver(post_save, sender=Product)
-@receiver(post_save, sender=Ilac)
-@receiver(post_delete, sender=Product)
-@receiver(post_delete, sender=Ilac)
-def clear_cache(sender, **kwargs):
+#@receiver(post_save, sender=Product)
+#@receiver(post_save, sender=Ilac)
+#@receiver(post_delete, sender=Product)
+#@receiver(post_delete, sender=Ilac)
+#def clear_cache(sender, **kwargs):
     # Önbellekten verileri kontrol ediyoruz
-    combined_data = cache.get('combined_data')
+#   combined_data = cache.get('combined_data')
 
-    if combined_data is not None:
+#    if combined_data is not None:
         # Önbellekten verileri temizliyoruz
-        cache.delete('combined_data')
+#        cache.delete('combined_data')

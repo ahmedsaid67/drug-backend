@@ -111,14 +111,16 @@ class FormSerializers(serializers.ModelSerializer):
         model = Form
         fields = '__all__'
 
+
 class IlacDetailSerializer(serializers.ModelSerializer):
     ilac_kategori = IlacKategoriSerializers(read_only=True)
     hassasiyet_turu = HassasiyetTuruSerializers(read_only=True)
     hastaliklar = HastalikSerializers(many=True, read_only=True)
+    ilac_form = FormSerializers(read_only=True)
 
     class Meta:
         model = Ilac
-        fields = ['id', 'name', 'etken_madde', 'kullanim_uyarisi', 'document', 'ilac_kategori', 'hassasiyet_turu', 'hastaliklar']
+        fields = ['id', 'name', 'etken_madde', 'kullanim_uyarisi', 'document', 'ilac_kategori','ilac_form', 'hassasiyet_turu', 'hastaliklar']
 
 
 
