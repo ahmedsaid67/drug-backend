@@ -442,7 +442,7 @@ class IlacViewSet(viewsets.ModelViewSet):
     queryset = Ilac.objects.all().select_related('ilac_kategori', 'hassasiyet_turu','ilac_form').prefetch_related('hastaliklar').order_by('id')
 
     def get_serializer_class(self):
-        if self.action in ['list', 'medications_by_category', 'medications_by_category_no_pagination']:
+        if self.action in ['list', 'medications_by_category', 'medications_by_category_no_pagination','medications-by-form-no-pagination']:
             return IlacListSerializer
         return IlacDetailSerializer
 
@@ -465,7 +465,7 @@ class IlacViewSet(viewsets.ModelViewSet):
             )
 
         # İlaçları kategoriye göre filtrele, values() kaldırıldı
-        medications = Ilac.objects.filter(ilac_kategori_id=category_id).select_related('hassasiyet_turu').order_by('id')
+        medications = Ilac.objects.filter(ilac_kategori_id=category_id).only('id', 'name', 'etken_madde', 'hassasiyet_turu').select_related('hassasiyet_turu').order_by('id')
 
         # Sorguyu sayfalı hale getirmek
         page = self.paginate_queryset(medications)
@@ -488,10 +488,49 @@ class IlacViewSet(viewsets.ModelViewSet):
             )
 
         # İlaçları kategoriye göre filtrele, values() kaldırıldı
-        medications = Ilac.objects.filter(ilac_kategori_id=category_id).select_related('hassasiyet_turu').order_by('id')
+        medications = Ilac.objects.filter(ilac_kategori_id=category_id).only('id', 'name', 'etken_madde', 'hassasiyet_turu').select_related('hassasiyet_turu').order_by('id')
 
         # Sayfalama olmadan veriyi serialize et ve döndür
         serializer = self.get_serializer(medications, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=['get'], url_path='medications-by-form-no-pagination')
+    def medications_by_form_no_pagination(self, request):
+        form_id = request.query_params.get('form_id')
+        if not form_id:
+            return Response(
+                {"detail": "category_id parameter is required."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # İlaçları kategoriye göre filtrele, values() kaldırıldı
+        medications = Ilac.objects.filter(ilac_form_id=form_id).only('id', 'name', 'etken_madde','hassasiyet_turu').select_related('hassasiyet_turu').order_by('id')
+
+        # Sayfalama olmadan veriyi serialize et ve döndür
+        serializer = IlacListSerializer(medications, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=['get'], url_path='medications-by-form')
+    def medications_by_form(self, request):
+        form_id = request.query_params.get('form_id')
+        if not form_id:
+            return Response(
+                {"detail": "category_id parameter is required."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # İlaçları kategoriye göre filtrele, values() kaldırıldı
+        medications = Ilac.objects.filter(ilac_form_id=form_id).only('id', 'name', 'etken_madde','hassasiyet_turu').select_related('hassasiyet_turu').order_by('id')
+
+        # Sorguyu sayfalı hale getirmek
+        page = self.paginate_queryset(medications)
+        if page is not None:
+            # Sayfalı veriyi serialize et
+            serializer = IlacListSerializer(medications, many=True)
+            return self.get_paginated_response(serializer.data)
+
+        # Sayfalama yoksa tüm veriyi döndür
+        serializer = IlacListSerializer(medications, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     @action(detail=False, methods=['post'])
@@ -1050,16 +1089,27 @@ class HatalikYasDozViewSet(viewsets.ModelViewSet):
         ilac_id = request.query_params.get('ilac_id')
         hastalik_id = request.query_params.get('hastalik_id')
 
-        # İlac ID ve hastalık ID'nin geçerli olup olmadığını kontrol et
+        try:
+            yas = int(request.query_params.get('yas', 0))
+        except ValueError:
+            return Response({'error': 'Yaş geçersiz.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        yas_birimi = request.query_params.get('yas_birimi', 'yil')
+
         if not ilac_id or not hastalik_id:
             return Response({'error': 'İlac ID ve hastalık ID parametreleri gereklidir.'},
                             status=status.HTTP_400_BAD_REQUEST)
 
+        # Yaşı aya çevirme (Eğer yıl verilmişse)
+        if yas_birimi == 'yil':
+            yas *= 12  # Yılı aya çeviriyoruz
+
         # İlac ID ve hastalık ID'ye göre filtreleme
-        yas_doz_list = HatalikYasDoz.objects.filter(ilac_id=ilac_id, hastaliklar_id=hastalik_id)
+        yas_doz_list = HatalikYasDoz.objects.filter(ilac_id=ilac_id, hastaliklar_id=hastalik_id, min_yas__lte=yas,
+                                                    maks_yas__gte=yas)
+
 
         if yas_doz_list.exists():
-            # Eğer birden fazla sonuç varsa, ilkini döndürür
             yas_doz = yas_doz_list.first()
             serializer = self.get_serializer(yas_doz)
             return Response(serializer.data, status=status.HTTP_200_OK)
@@ -1439,27 +1489,29 @@ class ArtanKiloDozViewSet(viewsets.ModelViewSet,BaseOlcekHesaplayici):
             min_doz = kilodoz.threshold_weight_min_dose
             maks_doz = kilodoz.threshold_weight_max_dose
 
-
-            if maks_doz is None:
-                if kilodoz.ilac.ilac_kategori.id in self.SPOON_ACCOUNTING_CATEGORIES:
-                    min_kasik = (min_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-                    min_kasik_mesaj = self.olcek_formatla(min_kasik)
-                    doz_message = f"{min_kasik_mesaj} kullanın."
-                else:
-                    doz_message = f"{min_doz} ml kullanın."
+            if min_doz is None and maks_doz is None:
+                doz_message = "Kullanımı önerilmez."
             else:
-                if kilodoz.ilac.ilac_kategori.id in self.SPOON_ACCOUNTING_CATEGORIES:
-                    min_kasik = (min_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-                    min_kasik_mesaj = self.olcek_formatla(min_kasik)
-                    maks_kasik = (maks_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-                    maks_kasik_mesaj = self.olcek_formatla(maks_kasik)
-
-                    if min_kasik_mesaj == maks_kasik_mesaj:
+                if maks_doz is None:
+                    if kilodoz.ilac.ilac_kategori.id in self.SPOON_ACCOUNTING_CATEGORIES:
+                        min_kasik = (min_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                        min_kasik_mesaj = self.olcek_formatla(min_kasik)
                         doz_message = f"{min_kasik_mesaj} kullanın."
                     else:
-                        doz_message = f"{min_kasik_mesaj} veya {maks_kasik_mesaj} kullanın."
+                        doz_message = f"{min_doz} ml kullanın."
                 else:
-                    doz_message = f"{min_doz} ml  veya {maks_doz} ml kullanın."
+                    if kilodoz.ilac.ilac_kategori.id in self.SPOON_ACCOUNTING_CATEGORIES:
+                        min_kasik = (min_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                        min_kasik_mesaj = self.olcek_formatla(min_kasik)
+                        maks_kasik = (maks_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                        maks_kasik_mesaj = self.olcek_formatla(maks_kasik)
+
+                        if min_kasik_mesaj == maks_kasik_mesaj:
+                            doz_message = f"{min_kasik_mesaj} kullanın."
+                        else:
+                            doz_message = f"{min_kasik_mesaj} veya {maks_kasik_mesaj} kullanın."
+                    else:
+                        doz_message = f"{min_doz} ml  veya {maks_doz} ml kullanın."
 
             response_data = {
                 'message': doz_message,
@@ -1647,26 +1699,29 @@ class AzalanKiloDozViewSet(viewsets.ModelViewSet,BaseOlcekHesaplayici):
             min_doz = kilodoz.threshold_weight_min_dose
             maks_doz = kilodoz.threshold_weight_max_dose
 
-            if maks_doz is None:
-                if kilodoz.ilac.ilac_kategori.id in self.SPOON_ACCOUNTING_CATEGORIES:
-                    min_kasik = (min_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-                    min_kasik_mesaj = self.olcek_formatla(min_kasik)
-                    doz_message = f"{min_kasik_mesaj} kullanın."
-                else:
-                    doz_message = f"{min_doz} ml kullanın."
+            if min_doz is None and maks_doz is None:
+                doz_message = "Kullanımı önerilmez."
             else:
-                if kilodoz.ilac.ilac_kategori.id in self.SPOON_ACCOUNTING_CATEGORIES:
-                    min_kasik = (min_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-                    min_kasik_mesaj = self.olcek_formatla(min_kasik)
-                    maks_kasik = (maks_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-                    maks_kasik_mesaj = self.olcek_formatla(maks_kasik)
-
-                    if min_kasik_mesaj == maks_kasik_mesaj:
+                if maks_doz is None:
+                    if kilodoz.ilac.ilac_kategori.id in self.SPOON_ACCOUNTING_CATEGORIES:
+                        min_kasik = (min_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                        min_kasik_mesaj = self.olcek_formatla(min_kasik)
                         doz_message = f"{min_kasik_mesaj} kullanın."
                     else:
-                        doz_message = f"{min_kasik_mesaj} veya {maks_kasik_mesaj} kullanın."
+                        doz_message = f"{min_doz} ml kullanın."
                 else:
-                    doz_message = f"{min_doz} ml veya {maks_doz} ml kullanın."
+                    if kilodoz.ilac.ilac_kategori.id in self.SPOON_ACCOUNTING_CATEGORIES:
+                        min_kasik = (min_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                        min_kasik_mesaj = self.olcek_formatla(min_kasik)
+                        maks_kasik = (maks_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                        maks_kasik_mesaj = self.olcek_formatla(maks_kasik)
+
+                        if min_kasik_mesaj == maks_kasik_mesaj:
+                            doz_message = f"{min_kasik_mesaj} kullanın."
+                        else:
+                            doz_message = f"{min_kasik_mesaj} veya {maks_kasik_mesaj} kullanın."
+                    else:
+                        doz_message = f"{min_doz} ml veya {maks_doz} ml kullanın."
 
             response_data = {
                 'message': doz_message,
@@ -1687,9 +1742,8 @@ class AzalanKiloDozViewSet(viewsets.ModelViewSet,BaseOlcekHesaplayici):
             df = pd.read_excel(file)
 
             # Gerekli sütunların mevcut olup olmadığını kontrol et
-            required_columns = ['İLAÇ AD', 'durum', 'Kilo', 'ÜSTÜ', 'Kullanım sıklığı',
-                                'Check Uyarı',
-                                'TİPİK MİN DOZ', 'TİPİK MAX DOZ']
+            required_columns = ['İLAÇ AD', 'durum', 'Kilo', 'ÜSTÜ', 'Kullanım sıklığı','Check Uyarı', 'TİPİK MİN DOZ', 'TİPİK MAX DOZ']
+
             if not all(column in df.columns for column in required_columns):
                 return Response({
                     'error': 'Excel file must contain all required columns'
@@ -1697,7 +1751,7 @@ class AzalanKiloDozViewSet(viewsets.ModelViewSet,BaseOlcekHesaplayici):
 
             for _, row in df.iterrows():
                 # Eğer 'durum' True ise (zaten işlenmiş), atla
-                if row['durum'] == True:
+                if row['durum'] == True or not pd.notna(row['İLAÇ AD'])  :
                     continue
 
                 try:
@@ -1732,10 +1786,12 @@ class AzalanKiloDozViewSet(viewsets.ModelViewSet,BaseOlcekHesaplayici):
                         if len(alti_list) >= 1:
                             # Multiply the first element by 'kontsantrasyon_orani' and assign to min dose
                             threshold_weight_min_dose = alti_list[0] / kontsantrasyon_orani
+                            print("threshold_weight_min_dose:",threshold_weight_min_dose)
 
                         # Check if the list has a second element and assign to max dose
                         if len(alti_list) >= 2:
                             threshold_weight_max_dose = alti_list[1] / kontsantrasyon_orani
+                            print("threshold_weight_max_dose:", threshold_weight_max_dose)
 
 
                     check_uyari = row.get('Check Uyarı', '')
@@ -1765,8 +1821,9 @@ class AzalanKiloDozViewSet(viewsets.ModelViewSet,BaseOlcekHesaplayici):
                     new_ilac.save()
 
                 except Ilac.DoesNotExist:
-                    return Response({'error': f'Ilac with ID {row["ILAC ID"]} not found.'},
-                                    status=status.HTTP_400_BAD_REQUEST)
+                    return Response({'error': f'Ilac with name {row["İLAÇ AD"]} not found.'}, status=status.HTTP_400_BAD_REQUEST)
+
+
 
             return Response({'status': 'Ilac records created successfully'}, status=status.HTTP_201_CREATED)
 
@@ -1865,26 +1922,29 @@ class HastalikArtanKiloDozViewSet(viewsets.ModelViewSet,BaseOlcekHesaplayici):
             maks_doz = kilodoz.threshold_weight_max_dose
 
 
-            if maks_doz is None:
-                if kilodoz.ilac.ilac_kategori.id in self.SPOON_ACCOUNTING_CATEGORIES:
-                    min_kasik = (min_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-                    min_kasik_mesaj = self.olcek_formatla(min_kasik)
-                    doz_message = f"{min_kasik_mesaj} kullanın."
-                else:
-                    doz_message = f"{min_doz} ml kullanın."
+            if min_doz is None and maks_doz is None:
+                doz_message = "Kullanımı önerilmez."
             else:
-                if kilodoz.ilac.ilac_kategori.id in self.SPOON_ACCOUNTING_CATEGORIES:
-                    min_kasik = (min_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-                    min_kasik_mesaj = self.olcek_formatla(min_kasik)
-                    maks_kasik = (maks_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-                    maks_kasik_mesaj = self.olcek_formatla(maks_kasik)
-
-                    if min_kasik_mesaj == maks_kasik_mesaj:
+                if maks_doz is None:
+                    if kilodoz.ilac.ilac_kategori.id in self.SPOON_ACCOUNTING_CATEGORIES:
+                        min_kasik = (min_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                        min_kasik_mesaj = self.olcek_formatla(min_kasik)
                         doz_message = f"{min_kasik_mesaj} kullanın."
                     else:
-                        doz_message = f"{min_kasik_mesaj} veya {maks_kasik_mesaj} kullanın."
+                        doz_message = f"{min_doz} ml kullanın."
                 else:
-                    doz_message = f"{min_doz} ml veya {maks_doz} ml kullanın."
+                    if kilodoz.ilac.ilac_kategori.id in self.SPOON_ACCOUNTING_CATEGORIES:
+                        min_kasik = (min_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                        min_kasik_mesaj = self.olcek_formatla(min_kasik)
+                        maks_kasik = (maks_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                        maks_kasik_mesaj = self.olcek_formatla(maks_kasik)
+
+                        if min_kasik_mesaj == maks_kasik_mesaj:
+                            doz_message = f"{min_kasik_mesaj} kullanın."
+                        else:
+                            doz_message = f"{min_kasik_mesaj} veya {maks_kasik_mesaj} kullanın."
+                    else:
+                        doz_message = f"{min_doz} ml veya {maks_doz} ml kullanın."
 
             response_data = {
                 'message': doz_message,
@@ -1922,7 +1982,10 @@ class HastalikArtanKiloDozViewSet(viewsets.ModelViewSet,BaseOlcekHesaplayici):
                     # İlgili Ilac nesnesini bul
                     ilac = Ilac.objects.get(name=row['İLAÇ AD'])
 
+
                     hastalik = Hastalik.objects.get(name=row['Hastalık Ad'])
+
+                    print("hastalik:",hastalik)
 
                     # Konsantrasyon oranını hesapla
                     kontsantrasyon_orani = ilac.kontsantrasyon_mg / ilac.kontsantrasyon_ml
@@ -1997,8 +2060,7 @@ class HastalikArtanKiloDozViewSet(viewsets.ModelViewSet,BaseOlcekHesaplayici):
                     new_ilac.save()
 
                 except Ilac.DoesNotExist:
-                    return Response({'error': f'Ilac with ID {row["ILAC ID"]} not found.'},
-                                    status=status.HTTP_400_BAD_REQUEST)
+                    return Response({'error': f"Ilac '{row['İLAÇ AD']}' not found"}, status=status.HTTP_400_BAD_REQUEST)
 
             return Response({'status': 'Ilac records created successfully'}, status=status.HTTP_201_CREATED)
 
@@ -2079,27 +2141,29 @@ class HastalikAzalanKiloDozViewSet(viewsets.ModelViewSet,BaseOlcekHesaplayici):
             min_doz = kilodoz.threshold_weight_min_dose
             maks_doz = kilodoz.threshold_weight_max_dose
 
-
-            if maks_doz is None:
-                if kilodoz.ilac.ilac_kategori.id in self.SPOON_ACCOUNTING_CATEGORIES:
-                    min_kasik = (min_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-                    min_kasik_mesaj = self.olcek_formatla(min_kasik)
-                    doz_message = f"{min_kasik_mesaj} kullanın."
-                else:
-                    doz_message = f"{min_doz} ml kullanın."
+            if min_doz is None and maks_doz is None:
+                doz_message = "Kullanımı önerilmez."
             else:
-                if kilodoz.ilac.ilac_kategori.id in self.SPOON_ACCOUNTING_CATEGORIES:
-                    min_kasik = (min_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-                    min_kasik_mesaj = self.olcek_formatla(min_kasik)
-                    maks_kasik = (maks_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-                    maks_kasik_mesaj = self.olcek_formatla(maks_kasik)
-
-                    if min_kasik_mesaj == maks_kasik_mesaj:
+                if maks_doz is None:
+                    if kilodoz.ilac.ilac_kategori.id in self.SPOON_ACCOUNTING_CATEGORIES:
+                        min_kasik = (min_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                        min_kasik_mesaj = self.olcek_formatla(min_kasik)
                         doz_message = f"{min_kasik_mesaj} kullanın."
                     else:
-                        doz_message = f"{min_kasik_mesaj} veya {maks_kasik_mesaj} kullanın."
+                        doz_message = f"{min_doz} ml kullanın."
                 else:
-                    doz_message = f"{min_doz} ml veya {maks_doz} ml kullanın."
+                    if kilodoz.ilac.ilac_kategori.id in self.SPOON_ACCOUNTING_CATEGORIES:
+                        min_kasik = (min_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                        min_kasik_mesaj = self.olcek_formatla(min_kasik)
+                        maks_kasik = (maks_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                        maks_kasik_mesaj = self.olcek_formatla(maks_kasik)
+
+                        if min_kasik_mesaj == maks_kasik_mesaj:
+                            doz_message = f"{min_kasik_mesaj} kullanın."
+                        else:
+                            doz_message = f"{min_kasik_mesaj} veya {maks_kasik_mesaj} kullanın."
+                    else:
+                        doz_message = f"{min_doz} ml veya {maks_doz} ml kullanın."
 
             response_data = {
                 'message': doz_message,
@@ -2307,26 +2371,29 @@ class HastalikHemYasaHemKiloyaBagliArtanDozViewSet(viewsets.ModelViewSet,BaseOlc
             min_doz = kilodoz.threshold_age_min_dose
             maks_doz = kilodoz.threshold_age_max_dose
 
-            if maks_doz is None:
-                if kilodoz.ilac.ilac_kategori.id in self.SPOON_ACCOUNTING_CATEGORIES:
-                    min_kasik = (min_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-                    min_kasik_mesaj = self.olcek_formatla(min_kasik)
-                    doz_message = f"{min_kasik_mesaj} kullanın."
-                else:
-                    doz_message = f"{min_doz} ml kullanın."
+            if min_doz is None and maks_doz is None:
+                doz_message = "Kullanımı önerilmez."
             else:
-                if kilodoz.ilac.ilac_kategori.id in self.SPOON_ACCOUNTING_CATEGORIES:
-                    min_kasik = (min_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-                    min_kasik_mesaj = self.olcek_formatla(min_kasik)
-                    maks_kasik = (maks_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-                    maks_kasik_mesaj = self.olcek_formatla(maks_kasik)
-
-                    if min_kasik_mesaj == maks_kasik_mesaj:
+                if maks_doz is None:
+                    if kilodoz.ilac.ilac_kategori.id in self.SPOON_ACCOUNTING_CATEGORIES:
+                        min_kasik = (min_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                        min_kasik_mesaj = self.olcek_formatla(min_kasik)
                         doz_message = f"{min_kasik_mesaj} kullanın."
                     else:
-                        doz_message = f"{min_kasik_mesaj} veya {maks_kasik_mesaj} kullanın."
+                        doz_message = f"{min_doz} ml kullanın."
                 else:
-                    doz_message = f"{min_doz} ml veya {maks_doz} ml kullanın."
+                    if kilodoz.ilac.ilac_kategori.id in self.SPOON_ACCOUNTING_CATEGORIES:
+                        min_kasik = (min_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                        min_kasik_mesaj = self.olcek_formatla(min_kasik)
+                        maks_kasik = (maks_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                        maks_kasik_mesaj = self.olcek_formatla(maks_kasik)
+
+                        if min_kasik_mesaj == maks_kasik_mesaj:
+                            doz_message = f"{min_kasik_mesaj} kullanın."
+                        else:
+                            doz_message = f"{min_kasik_mesaj} veya {maks_kasik_mesaj} kullanın."
+                    else:
+                        doz_message = f"{min_doz} ml veya {maks_doz} ml kullanın."
 
             response_data = {
                 'message': doz_message,
@@ -2565,26 +2632,29 @@ class HastalikHemYasaHemKiloyaBagliAzalanDozViewSet(viewsets.ModelViewSet,BaseOl
             maks_doz = kilodoz.threshold_age_max_dose
 
 
-            if maks_doz is None:
-                if kilodoz.ilac.ilac_kategori.id in self.SPOON_ACCOUNTING_CATEGORIES:
-                    min_kasik = (min_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-                    min_kasik_mesaj = self.olcek_formatla(min_kasik)
-                    doz_message = f"{min_kasik_mesaj} kullanın."
-                else:
-                    doz_message = f"{min_doz} ml kullanın."
+            if min_doz is None and maks_doz is None:
+                doz_message = "Kullanımı önerilmez."
             else:
-                if kilodoz.ilac.ilac_kategori.id in self.SPOON_ACCOUNTING_CATEGORIES:
-                    min_kasik = (min_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-                    min_kasik_mesaj = self.olcek_formatla(min_kasik)
-                    maks_kasik = (maks_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-                    maks_kasik_mesaj = self.olcek_formatla(maks_kasik)
-
-                    if min_kasik_mesaj == maks_kasik_mesaj:
+                if maks_doz is None:
+                    if kilodoz.ilac.ilac_kategori.id in self.SPOON_ACCOUNTING_CATEGORIES:
+                        min_kasik = (min_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                        min_kasik_mesaj = self.olcek_formatla(min_kasik)
                         doz_message = f"{min_kasik_mesaj} kullanın."
                     else:
-                        doz_message = f"{min_kasik_mesaj} veya {maks_kasik_mesaj} kullanın."
+                        doz_message = f"{min_doz} ml kullanın."
                 else:
-                    doz_message = f"{min_doz} ml veya {maks_doz} ml kullanın."
+                    if kilodoz.ilac.ilac_kategori.id in self.SPOON_ACCOUNTING_CATEGORIES:
+                        min_kasik = (min_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                        min_kasik_mesaj = self.olcek_formatla(min_kasik)
+                        maks_kasik = (maks_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                        maks_kasik_mesaj = self.olcek_formatla(maks_kasik)
+
+                        if min_kasik_mesaj == maks_kasik_mesaj:
+                            doz_message = f"{min_kasik_mesaj} kullanın."
+                        else:
+                            doz_message = f"{min_kasik_mesaj} veya {maks_kasik_mesaj} kullanın."
+                    else:
+                        doz_message = f"{min_doz} ml veya {maks_doz} ml kullanın."
 
             response_data = {
                 'message': doz_message,
@@ -2624,6 +2694,7 @@ class HastalikHemYasaHemKiloyaBagliAzalanDozViewSet(viewsets.ModelViewSet,BaseOl
                     ilac = Ilac.objects.get(name=row['İLAÇ AD'])
 
                     hastalik = Hastalik.objects.get(name=row['Hastalık Ad'])
+
 
                     # Konsantrasyon oranını hesapla
                     kontsantrasyon_orani = ilac.kontsantrasyon_mg / ilac.kontsantrasyon_ml
@@ -2688,7 +2759,11 @@ class HastalikHemYasaHemKiloyaBagliAzalanDozViewSet(viewsets.ModelViewSet,BaseOl
                     new_ilac.save()
 
                 except Ilac.DoesNotExist:
-                    return Response({'error': f'Ilac with ID {row["ILAC ID"]} not found.'},
+                    return Response({'error': f'Ilac with AD {row["ILAC AD"]} not found.'},
+                                    status=status.HTTP_400_BAD_REQUEST)
+
+                except Hastalik.DoesNotExist:
+                    return Response({'error': f'Ilac with AD {row["Hastalık Ad"]} not found.'},
                                     status=status.HTTP_400_BAD_REQUEST)
 
             return Response({'status': 'Ilac records created successfully'}, status=status.HTTP_201_CREATED)
@@ -2734,40 +2809,6 @@ class SupplementViewSet(viewsets.ModelViewSet):
     serializer_class = SupplementSerializers
     pagination_class = NoPagination
 
-    @action(detail=False, methods=['post'])
-    def bulk_create_from_excel(self, request):
-        file = request.FILES.get('file')
-        if not file:
-            return Response({'error': 'No file uploaded'}, status=status.HTTP_400_BAD_REQUEST)
-
-        try:
-            # Excel dosyasını oku
-            df = pd.read_excel(file)
-
-            # İlgili sütunların var olup olmadığını kontrol et
-            if 'name' not in df.columns or 'durum' not in df.columns:
-                return Response({'error': 'Excel file must contain "name" and "durum" columns'},
-                                status=status.HTTP_400_BAD_REQUEST)
-
-            # Sadece durum False olanları filtrele
-            df_filtered = df[df['durum'] == False]
-
-            # Tekrarlı olmasın diye benzersiz isimleri al
-            names = df_filtered['name'].dropna().str.strip().unique()
-
-            # Veritabanında zaten var olan isimleri kontrol et
-            existing_supplements = set(Supplement.objects.filter(name__in=names).values_list('name', flat=True))
-
-            # Yeni Supplement nesnelerini oluştur
-            new_names = [name for name in names if name not in existing_supplements]
-            supplements = [Supplement(name=name) for name in new_names]
-            Supplement.objects.bulk_create(supplements)
-
-            return Response({'status': 'Supplements created successfully'}, status=status.HTTP_201_CREATED)
-        except Exception as e:
-            return Response({'error': f'An error occurred while processing the file: {str(e)}'},
-                            status=status.HTTP_400_BAD_REQUEST)
-
 
 
 
@@ -2799,70 +2840,14 @@ class ProductCategoryViewSet(viewsets.ModelViewSet):
         # Serileştirilmiş veriyi döndür
         return Response(serializer.data, status=status.HTTP_200_OK)
 
-    @action(detail=False, methods=['post'])
-    def bulk_create_from_excel(self, request):
-        file = request.FILES.get('file')
-        if not file:
-            return Response({'error': 'No file uploaded'}, status=status.HTTP_400_BAD_REQUEST)
-
-        try:
-            # Excel dosyasını oku
-            df = pd.read_excel(file)
-
-            # Gerekli sütunların varlığını kontrol et
-            if 'name' not in df.columns or 'durum' not in df.columns or 'supplement name' not in df.columns:
-                return Response({
-                    'error': 'Excel file must contain "name", "durum", and "supplement name" columns'
-                }, status=status.HTTP_400_BAD_REQUEST)
-
-            # Sadece 'durum' False olanları filtrele
-            df_filtered = df[df['durum'] == False]
-
-            # Veri temizliği ve validation
-            names = df_filtered['name'].dropna().str.strip().unique()
-            supplement_names = df_filtered['supplement name'].dropna().str.strip().unique()
-
-            # Veritabanında bulunan supplement isimlerini kontrol et
-            supplements = Supplement.objects.filter(name__in=supplement_names)
-            supplement_dict = {supplement.name: supplement for supplement in supplements}
-
-            # Yeni ProductCategory nesnelerini oluştur
-            new_categories = []
-            for _, row in df_filtered.iterrows():
-                supplement_name = row['supplement name'].strip()
-                supplement = supplement_dict.get(supplement_name)
-
-                if supplement:
-                    new_categories.append(ProductCategory(
-                        name=row['name'].strip(),
-                        supplement=supplement
-                    ))
-                else:
-                    return Response({
-                        'error': f'Supplement with name "{supplement_name}" not found.'
-                    }, status=status.HTTP_400_BAD_REQUEST)
-
-            # Kategorileri toplu olarak kaydet
-            ProductCategory.objects.bulk_create(new_categories)
-
-            return Response({'status': 'Product categories created successfully'}, status=status.HTTP_201_CREATED)
-
-        except Exception as e:
-            return Response({'error': f'An error occurred while processing the file: {str(e)}'},
-                            status=status.HTTP_400_BAD_REQUEST)
-
-
-
-
-
 
 
 class ProductViewSet(viewsets.ModelViewSet):
     queryset = Product.objects.all().order_by('id')
     serializer_class = ProductSerializers
 
-    @action(detail=False, methods=['get'], url_path='list-products-by-category')
-    def list_products_by_productcategory(self, request):
+    @action(detail=False, methods=['get'], url_path='list-products-by-category-no-paginations')
+    def list_products_by_productcategory_no_paginations(self, request):
         # product_category_id parametresini al
         product_category_id = request.query_params.get('product_category_id')
 
@@ -2881,60 +2866,31 @@ class ProductViewSet(viewsets.ModelViewSet):
         # Serileştirilmiş veriyi döndür
         return Response(serializer.data, status=status.HTTP_200_OK)
 
-    @action(detail=False, methods=['post'])
-    def bulk_create_from_excel(self, request):
-        file = request.FILES.get('file')
-        if not file:
-            return Response({'error': 'No file uploaded'}, status=status.HTTP_400_BAD_REQUEST)
+    @action(detail=False, methods=['get'], url_path='list-products-by-category')
+    def list_products_by_productcategory(self, request):
+        # Get product_category_id from query params
+        product_category_id = request.query_params.get('product_category_id')
 
-        try:
-            # Excel dosyasını oku
-            df = pd.read_excel(file)
+        if not product_category_id:
+            return Response({"detail": "product_category_id is required."}, status=status.HTTP_400_BAD_REQUEST)
 
-            # Gerekli sütunların varlığını kontrol et
-            if 'name' not in df.columns or 'durum' not in df.columns or 'product category name' not in df.columns:
-                return Response({
-                    'error': 'Excel file must contain "name", "durum", and "product category name" columns'
-                }, status=status.HTTP_400_BAD_REQUEST)
+        # Retrieve the product category safely
+        product_category = get_object_or_404(ProductCategory, id=product_category_id)
 
-            # Sadece 'durum' False olanları filtrele
-            df_filtered = df[df['durum'] == False]
+        # Filter products by the selected category
+        product_queryset = Product.objects.filter(product_category=product_category)
 
-            # Yeni Product nesnelerini oluşturmak için liste
-            new_products = []
+        # Apply pagination to the queryset
+        page = self.paginate_queryset(product_queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
 
-            # Her satırdaki veriyi işleyerek Product nesnesi oluştur
-            for _, row in df_filtered.iterrows():
-                product_category_name = row['product category name'].strip()
+        # If pagination is not applied, return all products
+        serializer = self.get_serializer(product_queryset, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
-                # ProductCategory nesnesini al
-                try:
-                    product_category = ProductCategory.objects.get(name=product_category_name)
-                except ProductCategory.DoesNotExist:
-                    return Response({
-                        'error': f'Product Category with name "{product_category_name}" not found.'
-                    }, status=status.HTTP_400_BAD_REQUEST)
 
-                # Explanation alanını kontrol et, boş ise boş string olarak ayarla
-                explanation = row.get('explanation', '')
-                if pd.isna(explanation):
-                    explanation = ''
-
-                # Yeni Product nesnesini oluştur
-                new_products.append(Product(
-                    name=row['name'].strip(),
-                    product_category=product_category,
-                    explanation=explanation
-                ))
-
-            # Ürünleri toplu olarak kaydet
-            Product.objects.bulk_create(new_products)
-
-            return Response({'status': 'Products created successfully'}, status=status.HTTP_201_CREATED)
-
-        except Exception as e:
-            return Response({'error': f'An error occurred while processing the file: {str(e)}'},
-                            status=status.HTTP_400_BAD_REQUEST)
 
 
 
@@ -2946,13 +2902,15 @@ class CombinedView(APIView):
         # Önbellekten verileri alıyoruz
 
         products = Product.objects.all().values('id', 'name')
-        ilaclar = Ilac.objects.all().values('id', 'name', 'etken_madde')
+        ilaclar = Ilac.objects.all().values('id', 'name', 'etken_madde', 'hassasiyet_turu_id')
 
         # Tüm Product nesneleri için sayfa alanı 'besin takviyesi' olacak
         product_list = list(products)
         for product in product_list:
             product['sayfa'] = 'besin takviyesi'
             product['etken_madde'] = ''
+            product['hassasiyet_turu_id'] = ''
+
 
         # Tüm Ilac nesneleri için sayfa alanı 'ilac' olacak
         ilac_list = list(ilaclar)
@@ -2973,11 +2931,14 @@ class CombinedView(APIView):
 
 
 from .models import Hatirlatici, HatirlaticiSaati, Bildirim
-from .serializers import HatirlaticiSerializers, HatirlaticiSaatiSerializers, BildirimSerializers
+from .serializers import HatirlaticiSerializers, HatirlaticiSaatiSerializers, BildirimSerializers,HatirlaticiComplexSerializers
 from django.utils.dateparse import parse_date
-from django.utils.timezone import make_aware
-from datetime import datetime
 from django.db.models import Q
+from rest_framework.pagination import PageNumberPagination
+
+class CustomPagination(PageNumberPagination):
+    page_size = 10  # Set the default page size to 10
+
 
 class HatirlaticiViewSet(viewsets.ModelViewSet):
     queryset = Hatirlatici.objects.all().order_by('-id')
@@ -3001,6 +2962,8 @@ class HatirlaticiViewSet(viewsets.ModelViewSet):
         if saat_listesi:
             for saat in saat_listesi:
                 HatirlaticiSaati.objects.create(hatirlatici=hatirlatici, saat=saat)
+
+
 
         # Return the response with the created hatirlatici
         headers = self.get_success_headers(serializer.data)
@@ -3029,7 +2992,7 @@ class HatirlaticiViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(instance)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
-    @action(detail=False, methods=['get'], url_path='user-active-reminders')
+    @action(detail=False, methods=['get'], url_path='user-active-reminders', pagination_class=CustomPagination)
     def user_active_reminders(self, request, *args, **kwargs):
         user = request.user
         date_str = request.query_params.get('date')
@@ -3038,7 +3001,7 @@ class HatirlaticiViewSet(viewsets.ModelViewSet):
             return Response({"error": "Date parameter is required"}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            date = date_str
+            date = parse_date(date_str)
             if not date:
                 raise ValueError("Invalid date format")
         except ValueError as e:
@@ -3049,16 +3012,21 @@ class HatirlaticiViewSet(viewsets.ModelViewSet):
             baslangic_tarihi__lte=date,
             bitis_tarihi__gte=date,
             is_removed=False
-        ).prefetch_related('hatirlatici_saat').order_by('-id')
+        ).only('id', 'name', 'baslangic_tarihi', 'bitis_tarihi', 'is_removed', 'is_stopped').prefetch_related(
+            'hatirlatici_saat').order_by('-id')
 
-        # Paginate results
-        page = self.paginate_queryset(active_reminders)
+        # Use the custom pagination
+        paginator = CustomPagination()
+        page = paginator.paginate_queryset(active_reminders, request)
         if page is not None:
-            serializer = self.get_serializer(page, many=True)
-            return self.get_paginated_response(serializer.data)
+            serializer = HatirlaticiComplexSerializers(page, many=True)
+            return paginator.get_paginated_response(serializer.data)
 
-        serializer = self.get_serializer(active_reminders, many=True)
+        # Use HatirlaticiComplexSerializers for full response
+        serializer = HatirlaticiComplexSerializers(active_reminders, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+
 
     @action(detail=False, methods=['get'], url_path='user-inactive-reminders')
     def user_inactive_reminders(self, request, *args, **kwargs):
@@ -3116,3 +3084,47 @@ class HatirlaticiSaatiViewSet(viewsets.ModelViewSet):
 class BildirimViewSet(viewsets.ModelViewSet):
     queryset = Bildirim.objects.all().order_by('id')
     serializer_class = BildirimSerializers
+
+    @action(detail=False, methods=['get'], url_name='notifications-user-list')
+    def notifications_user_list(self, request):
+        user = request.user  # Get the user from the request
+
+        # Filter notifications for the specific user
+        notifications = Bildirim.objects.filter(hatirlatici__user=user).order_by('-tarih', '-saat').distinct()
+        print("notifications:",notifications)
+
+        # Use the default paginator
+        page = self.paginate_queryset(notifications)
+        if page is not None:
+            # If paginated, return paginated response
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+
+        # If no pagination is applied, return all notifications
+        serializer = self.get_serializer(notifications, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=['post'], url_name='notifications-list-create')
+    def notifications_list_create(self, request):
+        # POST isteği ile gelen verileri alalım
+        bildirim_list = request.data.get('bildirim_list')
+
+        # Eğer bildirim_list yoksa ya da boşsa hata döndürelim
+        if not bildirim_list or not isinstance(bildirim_list, list):
+            return Response({"error": "bildirim_list eksik veya geçersiz formatta"}, status=400)
+
+        # bildirim_list içindeki her bir nesneyi işleyelim
+        for bildirim in bildirim_list:
+            hatirlatici_id = bildirim.get('hatirlatici_id')
+            explanations = bildirim.get('explanations')
+            saat = bildirim.get('saat')
+            tarih = bildirim.get('tarih')
+
+            # Gerekli kontrolleri yapalım
+            if not hatirlatici_id or not explanations or not saat:
+                return Response({"error": "Eksik veri: hatirlatici_id, explanations veya saat eksik"}, status=400)
+
+            Bildirim.objects.create(hatirlatici_id=hatirlatici_id,saat=saat,explanations=explanations,tarih=tarih)
+
+        # Tüm bildirimler başarıyla işlendiğinde başarı yanıtı döndürelim
+        return Response({"success": True}, status=200)

@@ -96,6 +96,7 @@ class Hastalik(models.Model):
 class Form(models.Model):
     name = models.CharField(max_length=50, null=True, blank=True)
     img = models.ImageField(upload_to='form_img', null=True, blank=True)
+    order = models.IntegerField(null=True, blank=True)
     def __str__(self):
         return self.name
 
@@ -119,7 +120,7 @@ class Ilac(models.Model):
 
 class YasDoz(models.Model):
     ilac = models.ForeignKey(Ilac, null=True, blank=True, on_delete=models.CASCADE)
-    doz = models.CharField(max_length=200, null=True, blank=True)
+    doz = models.CharField(max_length=400, null=True, blank=True)
     min_yas = models.IntegerField()
     maks_yas = models.IntegerField()
 
@@ -236,12 +237,18 @@ class HastalikHemYasaHemKiloyaBagliAzalanDoz(models.Model):
 
 class Supplement(models.Model):
     name = models.CharField(max_length=150, null=True, blank=True)
+    img = models.ImageField(upload_to='supplement_img', null=True, blank=True)
+    order = models.IntegerField(null=True, blank=True)
+
+    def __str__(self):
+        return self.name
+
 
 
 class ProductCategory(models.Model):
     name = models.CharField(max_length=150, null=True, blank=True)
     supplement = models.ForeignKey(Supplement, null=True, blank=True, on_delete=models.SET_NULL)
-    img = models.ImageField(upload_to='product_category_img', null=True, blank=True)
+
 
     def __str__(self):
         return self.name
@@ -265,6 +272,13 @@ class Hatirlatici(models.Model):
     bitis_tarihi = models.DateField(blank=True, null=True)
     is_removed = models.BooleanField(default=False)
     is_stopped = models.BooleanField(default=False)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['user', 'is_removed', 'baslangic_tarihi', 'bitis_tarihi']),
+            # Birden fazla alana göre filtreleme
+            models.Index(fields=['id']),  # ID'ye göre sıralama
+        ]
 
 
 
@@ -294,4 +308,6 @@ class Bildirim(models.Model):
         related_name='hatirlatici_bildirim'
     )
     saat = models.TimeField(blank=True, null=True)
+    explanations = models.TextField(blank=True, null=True)
+    tarih = models.DateField(blank=True, null=True)
     durum = models.BooleanField(default=False)

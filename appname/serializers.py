@@ -104,7 +104,7 @@ class HastalikSerializers(serializers.ModelSerializer):
 class HassasiyetTuruNameSerializer(serializers.ModelSerializer):
     class Meta:
         model = HassasiyetTuru
-        fields = ['name']
+        fields = ['id']
 
 class FormSerializers(serializers.ModelSerializer):
     class Meta:
@@ -283,7 +283,6 @@ class HatirlaticiJoinSaatiSerializers(serializers.ModelSerializer):
 
 
 class HatirlaticiSerializers(serializers.ModelSerializer):
-    hatirlatici_saat = HatirlaticiJoinSaatiSerializers(many=True, read_only=True)
 
 
     class Meta:
@@ -294,6 +293,23 @@ class HatirlaticiSerializers(serializers.ModelSerializer):
         request = self.context.get('request')  # Request objesini al
         user = request.user  # Kullanıcı bilgisine eriş
         print("validate:",validated_data)
+        hatirlatici = Hatirlatici.objects.create(user=user, **validated_data)
+
+        return hatirlatici
+
+
+
+class HatirlaticiComplexSerializers(serializers.ModelSerializer):
+    hatirlatici_saat = HatirlaticiJoinSaatiSerializers(many=True, read_only=True)
+
+
+    class Meta:
+        model = Hatirlatici
+        fields = ['id', 'name', 'baslangic_tarihi','bitis_tarihi','is_removed','is_stopped','hatirlatici_saat']
+
+    def create(self, validated_data):
+        request = self.context.get('request')  # Request objesini al
+        user = request.user  # Kullanıcı bilgisine eriş
         hatirlatici = Hatirlatici.objects.create(user=user, **validated_data)
 
         return hatirlatici
