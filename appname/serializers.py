@@ -472,11 +472,11 @@ class BlogContentSerializers(serializers.ModelSerializer):
 
     def get_is_liked(self,obj):
         user=self.context.get("request").user
-        return obj.likes.filter(user=user).exist()
+        return obj.likes.filter(user=user).exists()
 
-    def get_is_recorder(self,obj):
+    def get_is_recorded(self,obj):
         user = self.context.get("request").user
-        return obj.record.filter(user=user).exist()
+        return obj.record.filter(user=user).exists()
 
 
 
@@ -520,7 +520,7 @@ class StoryContentSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = StoryContent
-        fields = ['id','image','order','like_count','is_liked']
+        fields = ['id','image','order','like_count','is_liked','is_recorded']
 
 
     def get_like_count(self,obj):
@@ -528,11 +528,11 @@ class StoryContentSerializer(serializers.ModelSerializer):
 
     def get_is_liked(self,obj):
         user=self.context.get("request").user
-        return obj.likes.filter(user=user).exist()
+        return obj.likes.filter(user=user).exists()
 
-    def get_is_recorder(self,obj):
+    def get_is_recorded(self,obj):
         user = self.context.get("request").user
-        return obj.record.filter(user=user).exist()
+        return obj.record.filter(user=user).exists()
 
 
 
