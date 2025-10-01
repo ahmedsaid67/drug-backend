@@ -71,10 +71,24 @@ class PasswordResetCode(models.Model):
 
 
 # ------ ilaç -----
-
+from django.utils.text import slugify
 class IlacKategori(models.Model):
     name = models.CharField(max_length=200, null=True, blank=True)
     img = models.ImageField(upload_to='ilac_kategori_img',null=True,blank=True)
+    slug = models.SlugField(max_length=255, unique=True, blank=True, null=True)
+
+    def save(self, *args, **kwargs):
+        # If slug is not set, generate it
+        if not self.slug:
+            # Save the object to assign an id if it's a new instance
+            super(IlacKategori, self).save(*args, **kwargs)
+            # Generate the slug using the name and id
+            self.slug = slugify(f"{self.name}-{self.id}")
+            # Save again to update the slug field
+            kwargs.pop('force_insert', None)  # Remove force_insert if present
+            super(IlacKategori, self).save(*args, **kwargs)
+        else:
+            super(IlacKategori, self).save(*args, **kwargs)
 
     def __str__(self):
         return self.name
@@ -88,6 +102,20 @@ class HassasiyetTuru(models.Model):
 
 class Hastalik(models.Model):
     name = models.CharField(max_length=75, null=True, blank=True)
+    slug = models.SlugField(max_length=255, unique=True, blank=True, null=True)
+
+    def save(self, *args, **kwargs):
+        # Eğer slug boşsa ve yeni bir nesne ise
+        if not self.slug:
+            # Önce nesneyi kaydet (id oluşturmak için)
+            super(Hastalik, self).save(*args, **kwargs)
+            # Slug alanını oluştur ve güncelle
+            self.slug = slugify(f"{self.name}-{self.id}")
+            # Tekrar kaydet
+            kwargs.pop('force_insert', None)  # force_insert argümanını kaldır
+            super(Hastalik, self).save(*args, **kwargs)
+        else:
+            super(Hastalik, self).save(*args, **kwargs)
 
     def __str__(self):
         return self.name
@@ -97,6 +125,20 @@ class Form(models.Model):
     name = models.CharField(max_length=50, null=True, blank=True)
     img = models.ImageField(upload_to='form_img', null=True, blank=True)
     order = models.IntegerField(null=True, blank=True)
+    slug = models.SlugField(max_length=255, unique=True, blank=True, null=True)
+
+    def save(self, *args, **kwargs):
+        # If slug is not set, generate it
+        if not self.slug:
+            # Save the object to generate an id if it's new
+            super(Form, self).save(*args, **kwargs)
+            # Generate the slug using the name and id
+            self.slug = slugify(f"{self.name}-{self.id}")
+            # Save again to update the slug field
+            kwargs.pop('force_insert', None)  # Remove force_insert if present
+            super(Form, self).save(*args, **kwargs)
+        else:
+            super(Form, self).save(*args, **kwargs)
     def __str__(self):
         return self.name
 
@@ -104,7 +146,6 @@ class Form(models.Model):
 class Ilac(models.Model):
     name = models.CharField(max_length=250, null=True, blank=True)
     etken_madde = models.CharField(max_length=200, null=True, blank=True)
-    kullanim_uyarisi = models.CharField(max_length=300, null=True, blank=True)
     document = models.FileField(upload_to='documents', null=True, blank=True)  # PDF dosyası için alan
     ilac_kategori = models.ForeignKey(IlacKategori, null=True, blank=True, on_delete=models.SET_NULL)
     ilac_form = models.ForeignKey(Form, null=True, blank=True, on_delete=models.SET_NULL)
@@ -112,6 +153,23 @@ class Ilac(models.Model):
     hastaliklar = models.ManyToManyField(Hastalik, related_name="ilaclar")
     kontsantrasyon_ml = models.DecimalField(max_digits=9, decimal_places=4, null=True,blank=True)
     kontsantrasyon_mg = models.DecimalField(max_digits=9, decimal_places=4, null=True, blank=True)
+    slug = models.SlugField(max_length=255, unique=True, blank=True, null=True)  # Slug field
+    baslik = models.CharField(max_length=250, null=True, blank=True)
+    nedir = models.TextField( null=True, blank=True)
+    ne_icin_kullanilir = models.TextField( null=True, blank=True)
+
+    def save(self, *args, **kwargs):
+        # If slug is not set, generate it
+        if not self.slug:
+            # Save the object to generate an id if it's a new instance
+            super(Ilac, self).save(*args, **kwargs)
+            # Generate the slug using the name and id
+            self.slug = slugify(f"{self.name}-{self.id}")
+            # Save again to update the slug field
+            kwargs.pop('force_insert', None)  # Remove force_insert if present
+            super(Ilac, self).save(*args, **kwargs)
+        else:
+            super(Ilac, self).save(*args, **kwargs)
 
     def __str__(self):
         return self.name
@@ -137,6 +195,7 @@ class KiloDoz(models.Model):
 class ExplanationDoz(models.Model):
     ilac = models.ForeignKey(Ilac, null=True, blank=True, on_delete=models.CASCADE)
     bilgi = models.TextField(null=True, blank=True)
+    check_uyari = models.TextField(null=True, blank=True)
 
 
 class HatalikYasDoz(models.Model):
@@ -235,10 +294,26 @@ class HastalikHemYasaHemKiloyaBagliAzalanDoz(models.Model):
 # ------ besin takviyeleri ------
 
 
+# canlıda besıntakvıyesı modellerının hepsının yanında 2 var 2 olan model aktıftır
+
 class Supplement(models.Model):
     name = models.CharField(max_length=150, null=True, blank=True)
     img = models.ImageField(upload_to='supplement_img', null=True, blank=True)
     order = models.IntegerField(null=True, blank=True)
+    slug = models.SlugField(max_length=255, unique=True, blank=True, null=True)  # Slug field
+
+    def save(self, *args, **kwargs):
+        # If slug is not set, generate it
+        if not self.slug:
+            # Save the object to assign an id if it's new
+            super(Supplement, self).save(*args, **kwargs)
+            # Generate the slug using the name and id
+            self.slug = slugify(f"{self.name}-{self.id}")
+            # Save again to update the slug field
+            kwargs.pop('force_insert', None)  # Remove force_insert if present
+            super(Supplement, self).save(*args, **kwargs)
+        else:
+            super(Supplement, self).save(*args, **kwargs)
 
     def __str__(self):
         return self.name
@@ -248,7 +323,20 @@ class Supplement(models.Model):
 class ProductCategory(models.Model):
     name = models.CharField(max_length=150, null=True, blank=True)
     supplement = models.ForeignKey(Supplement, null=True, blank=True, on_delete=models.SET_NULL)
+    slug = models.SlugField(max_length=255, unique=True, blank=True, null=True)  # Slug field
 
+    def save(self, *args, **kwargs):
+        # If slug is not set, generate it
+        if not self.slug:
+            # Save the object to assign an id if it's new
+            super(ProductCategory, self).save(*args, **kwargs)
+            # Generate the slug using the name and id
+            self.slug = slugify(f"{self.name}-{self.id}")
+            # Save again to update the slug field
+            kwargs.pop('force_insert', None)  # Remove force_insert if present
+            super(ProductCategory, self).save(*args, **kwargs)
+        else:
+            super(ProductCategory, self).save(*args, **kwargs)
 
     def __str__(self):
         return self.name
@@ -257,6 +345,25 @@ class Product(models.Model):
     name = models.CharField(max_length=150, null=True, blank=True)
     product_category = models.ForeignKey(ProductCategory, null=True, blank=True, on_delete=models.SET_NULL)
     explanation = models.TextField(null=True, blank=True)
+    nedir = models.TextField(null=True, blank=True)
+    ne_icin_kullanilir = models.TextField(null=True, blank=True)
+    satin_al_link = models.TextField(null=True, blank=True)
+    slug = models.SlugField(max_length=255, unique=True, blank=True, null=True)
+    def save(self, *args, **kwargs):
+        # If slug is not set, generate it
+        if not self.slug:
+            # Save the object to assign an id if it's new
+            super(Product, self).save(*args, **kwargs)
+            # Generate the slug using the name and id
+            self.slug = slugify(f"{self.name}-{self.id}")
+            # Save again to update the slug field
+            kwargs.pop('force_insert', None)  # Remove force_insert if present
+            super(Product, self).save(*args, **kwargs)
+        else:
+            super(Product, self).save(*args, **kwargs)
+
+    def __str__(self):
+        return self.name
 
 
 # ------ hatırlatıcılar -----
@@ -267,7 +374,7 @@ class Hatirlatici(models.Model):
     name = models.CharField(max_length=150, null=True, blank=True)
     user = models.ForeignKey(CustomUser, null=True,blank=True, on_delete=models.CASCADE, related_name='hatirlatici_user')
     form = models.CharField(max_length=50, null=True, blank=True)
-    kuvvet = models.CharField(max_length=50, null=True, blank=True)  # 5ml gibi ölçüsü ile birlikte değer olacaktır.
+    kuvvet = models.CharField(max_length=500, null=True, blank=True)  # 5ml gibi ölçüsü ile birlikte değer olacaktır.
     baslangic_tarihi = models.DateField(blank=True, null=True)
     bitis_tarihi = models.DateField(blank=True, null=True)
     is_removed = models.BooleanField(default=False)
@@ -311,3 +418,109 @@ class Bildirim(models.Model):
     explanations = models.TextField(blank=True, null=True)
     tarih = models.DateField(blank=True, null=True)
     durum = models.BooleanField(default=False)
+
+
+class Contact(models.Model):
+    name = models.CharField(max_length=250)
+    mail = models.EmailField()
+    message = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+
+
+
+# blog bölümü
+
+
+class Blogs(models.Model):
+    baslik = models.CharField(max_length=100)
+    order = models.IntegerField(default=0)
+    explanations = models.TextField(null=True,blank=True)
+    cover_photo = models.ImageField(upload_to='cover_photo',null=True,blank=True)
+    is_status = models.BooleanField(default=True)
+    parent = models.ForeignKey(
+        'self',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='children'
+    )
+
+    def __str__(self):
+        return self.baslik
+
+class BlogContent(models.Model):
+    blog = models.ForeignKey(Blogs, related_name='blog_content', on_delete=models.CASCADE)
+    baslik = models.CharField(max_length=100,null=True,blank=True)
+    explanations = models.TextField(null=True, blank=True)
+    order = models.IntegerField(default=0)
+    is_status = models.BooleanField(default=True)
+
+    def __str__(self):
+        return f"{self.blog.baslik}- {self.baslik} - {self.order}"
+
+
+
+class BlogContentLike(models.Model):
+    story_content=models.ForeignKey(BlogContent,related_name='likes',on_delete=models.CASCADE)
+    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='blog_content_likes')
+
+
+class BlogContentRecorded(models.Model):
+    story_content = models.ForeignKey(BlogContent,related_name='record',on_delete=models.CASCADE)
+    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='blog_content_recorded')
+
+
+
+
+
+
+# storyler
+class StoryTitle(models.Model):
+    title = models.CharField(max_length=250)
+    order = models.IntegerField(default=0)
+    is_status = models.BooleanField(default=True)
+
+    def __str__(self):
+        return self.title
+
+
+
+class StoryCoverPhoto(models.Model):
+    title = models.TextField(null=True,blank=True)
+    story_title = models.ForeignKey(StoryTitle,related_name='story_cover_photo',on_delete=models.CASCADE)
+    cover_photo = models.ImageField(upload_to='story_cover_photo', null=True, blank=True)
+    order = models.IntegerField(default=0)
+    is_status = models.BooleanField(default=True)
+
+    def __str__(self):
+        return self.title
+
+
+
+
+class StoryContent(models.Model):
+    story_cover_Photo = models.ForeignKey(StoryCoverPhoto, related_name='story_content', on_delete=models.CASCADE)
+    image = models.ImageField(upload_to='story_content_image', null=True, blank=True)
+    order = models.IntegerField(default=0)
+    is_status = models.BooleanField(default=True)
+
+
+
+
+
+class StoryContentLike(models.Model):
+    story_content=models.ForeignKey(StoryContent,related_name='likes',on_delete=models.CASCADE)
+    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='story_content_likes')
+
+
+class StoryContentRecorded(models.Model):
+    story_content = models.ForeignKey(StoryContent,related_name='record',on_delete=models.CASCADE)
+    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='story_content_recorded')
+
+
+
+
+
+
+

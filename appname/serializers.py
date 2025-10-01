@@ -120,8 +120,7 @@ class IlacDetailSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Ilac
-        fields = ['id', 'name', 'etken_madde', 'kullanim_uyarisi', 'document', 'ilac_kategori','ilac_form', 'hassasiyet_turu', 'hastaliklar']
-
+        fields = ['id', 'name', 'etken_madde', 'document', 'ilac_kategori','ilac_form', 'hassasiyet_turu', 'hastaliklar','ne_icin_kullanilir','nedir','baslik']
 
 
 
@@ -129,7 +128,64 @@ class IlacListSerializer(serializers.ModelSerializer):
     hassasiyet_turu = HassasiyetTuruNameSerializer(read_only=True)
     class Meta:
         model = Ilac
-        fields = ['id', 'name', 'etken_madde','hassasiyet_turu']  # Sadece gerekli alanlar
+        fields = ['id', 'name', 'etken_madde','hassasiyet_turu','slug']  # Sadece gerekli alanlar
+
+
+
+class FormSecondSerializers(serializers.ModelSerializer):
+    class Meta:
+        model = Form
+        fields = ['id', 'name', 'slug']
+
+class IlacKullanımTalimatiSerializers(serializers.ModelSerializer):
+    ilac_form = FormSecondSerializers(read_only=True)
+    class Meta:
+        model = Ilac
+        fields = ['id', 'name', 'etken_madde', 'slug', 'document', 'ilac_form',]
+
+
+class IlacAramaSerializer(serializers.ModelSerializer):
+    ilac_form = FormSecondSerializers(read_only=True)
+    class Meta:
+        model = Ilac
+        fields = ['id', 'name', 'slug','ilac_form']
+
+
+class IlacAramaMobilSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Ilac
+        fields = ['id', 'name', 'etken_madde']
+
+
+class IlacAramaDetailSerializer(serializers.ModelSerializer):
+    hassasiyet_turu = HassasiyetTuruSerializers(read_only=True)
+    ilac_form = FormSecondSerializers(read_only=True)
+
+    class Meta:
+        model = Ilac
+        fields = ['id', 'name', 'etken_madde','slug','ilac_form', 'hassasiyet_turu']
+
+
+
+class IlacDozDetailSerializer(serializers.ModelSerializer):
+    hassasiyet_turu = HassasiyetTuruSerializers(read_only=True)
+    ilac_form = FormSecondSerializers(read_only=True)
+    hastaliklar = HastalikSerializers(many=True, read_only=True)
+
+    class Meta:
+        model = Ilac
+        fields = ['id', 'name', 'etken_madde','slug','ilac_form', 'hassasiyet_turu','hastaliklar']
+
+
+
+class IlacNedirSerializer(serializers.ModelSerializer):
+    ilac_form = FormSecondSerializers(read_only=True)
+
+    class Meta:
+        model = Ilac
+        fields = ['id', 'name', 'etken_madde','slug','ilac_form', 'nedir','ne_icin_kullanilir','baslik']
+
+
 
 
 class YasDozSerializers(serializers.ModelSerializer):
@@ -249,10 +305,14 @@ from .models import Supplement,ProductCategory,Product
 
 
 class SupplementSerializers(serializers.ModelSerializer):
+    product_category_count = serializers.SerializerMethodField()
 
     class Meta:
         model = Supplement
         fields = '__all__'
+
+    def get_product_category_count(self, obj):
+        return ProductCategory.objects.filter(supplement=obj).count()
 
 
 class ProductCategorySerializers(serializers.ModelSerializer):
@@ -267,6 +327,40 @@ class ProductSerializers(serializers.ModelSerializer):
     class Meta:
         model = Product
         fields = '__all__'
+
+
+
+class SupplementSecondSerializers(serializers.ModelSerializer):
+
+    class Meta:
+        model = Supplement
+        fields = ['name', 'slug']
+
+class ProductCategorySecondSerializers(serializers.ModelSerializer):
+    supplement=SupplementSecondSerializers()
+    class Meta:
+        model = ProductCategory
+        fields = ['name', 'slug','supplement']
+
+
+class ProductSecondSerializers(serializers.ModelSerializer):
+    product_category=ProductCategorySecondSerializers()
+    class Meta:
+        model = Product
+        fields = '__all__'
+
+
+class ProductAramaSerializers(serializers.ModelSerializer):
+    product_category=ProductCategorySecondSerializers()
+    class Meta:
+        model = Product
+        fields = ['name', 'slug','product_category']
+
+
+class ProductAramaMobilSerializers(serializers.ModelSerializer):
+    class Meta:
+        model = Product
+        fields = ['name', 'id']
 
 
 # ------ hatırlatıcılar -----
@@ -329,3 +423,118 @@ class BildirimSerializers(serializers.ModelSerializer):
     class Meta:
         model = Bildirim
         fields = '__all__'
+
+from .models import Contact
+class ContactSerializers(serializers.ModelSerializer):
+    class Meta:
+        model = Contact
+        fields = '__all__'
+
+
+
+
+
+# bloglar
+
+from .models import Blogs,BlogContent
+class BlogSerializer(serializers.ModelSerializer):
+    children = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Blogs
+        fields = ['id', 'baslik', 'order', 'cover_photo', 'parent', 'children','explanations']
+
+    def get_children(self, obj):
+        if obj.children.exists():
+            return BlogSerializer(obj.children.all(), many=True, context=self.context).data
+        return []
+
+
+class MiniBlogSerializer(serializers.ModelSerializer):
+
+    class Meta:
+        model = Blogs
+        fields = ['id', 'baslik', 'order', 'cover_photo', 'explanations']
+
+
+
+class BlogContentSerializers(serializers.ModelSerializer):
+
+    like_count = serializers.SerializerMethodField()
+    is_liked = serializers.SerializerMethodField()
+    is_recorded = serializers.SerializerMethodField()
+    class Meta:
+        model = BlogContent
+        fields = ['id', 'baslik', 'explanations','like_count','is_liked','is_recorded']
+
+    def get_like_count(self,obj):
+        return obj.likes.count()
+
+    def get_is_liked(self,obj):
+        user=self.context.get("request").user
+        return obj.likes.filter(user=user).exist()
+
+    def get_is_recorder(self,obj):
+        user = self.context.get("request").user
+        return obj.record.filter(user=user).exist()
+
+
+
+
+
+
+# story
+
+
+from .models import StoryTitle,StoryCoverPhoto
+
+
+class MinimalStoryCoverPhotoSerializer(serializers.ModelSerializer):
+
+    class Meta:
+        model = StoryCoverPhoto
+        fields = ['id','cover_photo']
+
+class StoryTitleSerializers(serializers.ModelSerializer):
+    story_cover_photos = serializers.SerializerMethodField()
+
+    class Meta:
+        model = StoryTitle
+        fields = [ 'id', 'title','order','story_cover_photos']
+
+    def get_story_cover_photos(self, obj):
+        story_cover_photo = StoryCoverPhoto.objects.filter(
+            story_title=obj,
+            is_status=True
+        ).order_by('order')[:10]  # veya '-created_at' varsa daha doğru olur
+        return MinimalStoryCoverPhotoSerializer(story_cover_photo, many=True, context=self.context).data
+
+
+from .models import StoryContent,StoryContentLike
+
+class StoryContentSerializer(serializers.ModelSerializer):
+
+    like_count = serializers.SerializerMethodField()
+    is_liked = serializers.SerializerMethodField()
+    is_recorded = serializers.SerializerMethodField()
+
+    class Meta:
+        model = StoryContent
+        fields = ['id','image','order','like_count','is_liked']
+
+
+    def get_like_count(self,obj):
+        return obj.likes.count()
+
+    def get_is_liked(self,obj):
+        user=self.context.get("request").user
+        return obj.likes.filter(user=user).exist()
+
+    def get_is_recorder(self,obj):
+        user = self.context.get("request").user
+        return obj.record.filter(user=user).exist()
+
+
+
+
+

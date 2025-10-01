@@ -23,7 +23,14 @@ class CustomAuthToken(ObtainEmailAuthToken):
         serializer.is_valid(raise_exception=True)
         user = serializer.validated_data['user']
         token, created = Token.objects.get_or_create(user=user)
-        return Response({'token': token.key})
+        # Kullanıcı bilgilerini döndürmek için serializer kullan
+        user_serializer = CustomUserSerializer(user)
+
+        return Response({
+            'token': token.key,
+            'user': user_serializer.data  # Tüm kullanıcı bilgileri
+        })
+
 
 
 class CheckToken(APIView):
@@ -65,8 +72,12 @@ class CustomUserViewSet(viewsets.ModelViewSet):
         # Kullanıcıya ait token'ı oluştur
         token, created = Token.objects.get_or_create(user=user)
 
-        # Sadece token'ı döndür
-        return Response({'token': token.key}, status=status.HTTP_201_CREATED)
+        user_serializer = CustomUserSerializer(user)
+
+        return Response({
+            'token': token.key,
+            'user': user_serializer.data  # Tüm kullanıcı bilgileri
+        })
 
 
 class ProfilViewSet(viewsets.ModelViewSet):
@@ -143,12 +154,15 @@ class PasswordResetViewSet(viewsets.GenericViewSet):
         )
 
         email_body = f"""
-        <div style="font-family: Arial, sans-serif; color: #333;">
-            <h2>Şifre Sıfırlama İsteği</h2>
-            <p>Şifrenizi sıfırlamak için aşağıdaki kodu kullanın:</p>
-            <p style="font-size: 24px; font-weight: bold;">{code}</p>
-            <p>Eğer bu işlemi siz yapmadıysanız, bu e-postayı dikkate almayın.</p>
-            <p>Teşekkürler,<br>Destek Ekibi</p>
+        <div style="font-family: Arial, sans-serif; color: #14171a; max-width: 600px; margin: auto; padding: 20px; border: 1px solid #eaeaea; border-radius: 8px; background-color: #f9f9f9;">
+            <h2 style="text-align: center; color: #1D64F2;">Ölçek - Şifre Sıfırlama</h2>
+            <p style="font-size: 16px; color: #14171a;">Merhaba,</p>
+            <p style="font-size: 16px; color: #14171a;">Şifrenizi sıfırlamak için aşağıdaki kodu kullanın:</p>
+            <p style="font-size: 24px; font-weight: bold; text-align: center; padding: 10px; background-color: #E7F3FE; border: 1px solid #1D64F2; border-radius: 4px; color: #1D64F2;">{code}</p>
+            <p style="font-size: 16px; color: #14171a;">Eğer bu işlemi siz yapmadıysanız, bu e-postayı dikkate almayın.</p>
+            <p style="font-size: 16px; color: #14171a;">Teşekkürler,<br>Ölçek Destek Ekibi</p>
+            <hr style="border: 0; border-top: 1px solid #eaeaea; margin: 20px 0;">
+            <p style="font-size: 12px; text-align: center; color: #999;">Bu e-posta, Ölçek uygulamasından bir şifre sıfırlama isteğiyle ilgili gönderilmiştir.</p>
         </div>
         """
 
@@ -195,12 +209,14 @@ from django.db import transaction
 
 
 
+
+
 class GoogleLoginView(APIView):
     def post(self, request, *args, **kwargs):
         id_token_received = request.data.get('token')
         if not id_token_received:
-            print("No token provided")
-            return Response({'error': 'No token provided'}, status=status.HTTP_400_BAD_REQUEST)
+            print("Token sağlanmadı")
+            return Response({'error': 'Token sağlanmadı'}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
             # Google token'ını doğrula
@@ -211,7 +227,10 @@ class GoogleLoginView(APIView):
             )
 
             # Google kullanıcı bilgilerini al
-            email = idinfo['email']
+            email = idinfo.get('email')
+            if not email:
+                raise KeyError('email')
+
             first_name = idinfo.get('given_name', '')
             last_name = idinfo.get('family_name', '')
 
@@ -239,9 +258,12 @@ class GoogleLoginView(APIView):
                 return Response({'token': token.key, 'is_new_user': is_new_user}, status=status.HTTP_200_OK)
 
         except ValueError as e:
-            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
-        except Exception as e:
-            return Response({'error': 'An unexpected error occurred: ' + str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response({'error': 'Geçersiz token: ' + str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        except KeyError as e:
+            if str(e) == 'email':
+                return Response({'error': 'Google tokenında email bilgisi mevcut değil.'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'error': 'Google tokenında eksik bilgi: ' + str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
 
 
 
@@ -423,10 +445,13 @@ class FormViewSet(viewsets.ModelViewSet):
             # Check existing categories in the database
             existing_categories = set(Form.objects.filter(name__in=names).values_list('name', flat=True))
 
-            # Create new `IlacKategori` instances for names not already in the database
+            # Create new `Form` instances for names not already in the database
             new_names = [name for name in names if name not in existing_categories]
             categories = [Form(name=name) for name in new_names]
-            Form.objects.bulk_create(categories)
+
+            # Save each category individually to ensure the save method is called
+            for category in categories:
+                category.save()  # This triggers the save method to generate slug
 
             return Response({'status': 'Categories created successfully'}, status=status.HTTP_201_CREATED)
         except Exception as e:
@@ -436,7 +461,7 @@ class FormViewSet(viewsets.ModelViewSet):
 
 
 from .models import Ilac
-from .serializers import IlacListSerializer,IlacDetailSerializer
+from .serializers import IlacListSerializer,IlacDetailSerializer,IlacKullanımTalimatiSerializers,IlacAramaSerializer,IlacAramaDetailSerializer,IlacDozDetailSerializer,IlacNedirSerializer,IlacAramaMobilSerializer
 
 class IlacViewSet(viewsets.ModelViewSet):
     queryset = Ilac.objects.all().select_related('ilac_kategori', 'hassasiyet_turu','ilac_form').prefetch_related('hastaliklar').order_by('id')
@@ -504,7 +529,7 @@ class IlacViewSet(viewsets.ModelViewSet):
             )
 
         # İlaçları kategoriye göre filtrele, values() kaldırıldı
-        medications = Ilac.objects.filter(ilac_form_id=form_id).only('id', 'name', 'etken_madde','hassasiyet_turu').select_related('hassasiyet_turu').order_by('id')
+        medications = Ilac.objects.filter(ilac_form_id=form_id).only('id', 'name', 'etken_madde','hassasiyet_turu').select_related('hassasiyet_turu').order_by('name')
 
         # Sayfalama olmadan veriyi serialize et ve döndür
         serializer = IlacListSerializer(medications, many=True)
@@ -520,13 +545,13 @@ class IlacViewSet(viewsets.ModelViewSet):
             )
 
         # İlaçları kategoriye göre filtrele, values() kaldırıldı
-        medications = Ilac.objects.filter(ilac_form_id=form_id).only('id', 'name', 'etken_madde','hassasiyet_turu').select_related('hassasiyet_turu').order_by('id')
+        medications = Ilac.objects.filter(ilac_form_id=form_id).only('id', 'name', 'etken_madde','hassasiyet_turu').select_related('hassasiyet_turu').order_by('name')
 
         # Sorguyu sayfalı hale getirmek
         page = self.paginate_queryset(medications)
         if page is not None:
             # Sayfalı veriyi serialize et
-            serializer = IlacListSerializer(medications, many=True)
+            serializer = IlacListSerializer(page, many=True)
             return self.get_paginated_response(serializer.data)
 
         # Sayfalama yoksa tüm veriyi döndür
@@ -545,8 +570,8 @@ class IlacViewSet(viewsets.ModelViewSet):
             df = pd.read_excel(file)
 
             # Gerekli sütunlar kontrolü
-            required_columns = ['name', 'durum', 'etken madde', 'ilaç kategori', 'Kullanım Uyarı', 'hassasiyet türü',
-                                'ilaç form', 'hastalıklar', 'Konsantrasyon ml', 'Konsantrasyon mg']
+            required_columns = ['name', 'durum', 'etken madde', 'ilaç kategori', 'hassasiyet türü',
+                                'ilaç form', 'hastalıklar', 'Konsantrasyon ml', 'Konsantrasyon mg', "Başlık", "Nedir", "Ne İçin Kullanılır"]
             missing_columns = [col for col in required_columns if col not in df.columns]
             if missing_columns:
                 return Response(
@@ -581,13 +606,6 @@ class IlacViewSet(viewsets.ModelViewSet):
                     hassasiyet_turu = None
 
 
-
-
-                # Kullanım Uyarısı alanı boşsa veya NaN ise, boş string ile değiştir
-                kullanim_uyarisi = row.get('Kullanım Uyarı', '')
-                if pd.isna(kullanim_uyarisi):
-                    kullanim_uyarisi = ''
-
                 # Konsantrasyon değerleri NaN mı kontrol et
                 konsantrasyon_ml = row['Konsantrasyon ml']
                 konsantrasyon_mg = row['Konsantrasyon mg']
@@ -604,7 +622,9 @@ class IlacViewSet(viewsets.ModelViewSet):
                     hassasiyet_turu=hassasiyet_turu,
                     kontsantrasyon_ml=konsantrasyon_ml,
                     kontsantrasyon_mg=konsantrasyon_mg,
-                    kullanim_uyarisi=kullanim_uyarisi
+                    baslik=row['Başlık'],
+                    nedir=row["Nedir"],
+                    ne_icin_kullanilir=row["Ne İçin Kullanılır"]
                 )
                 new_ilac.save()  # Önce kaydetmemiz gerekiyor ki ManyToMany alanına hastalıkları ekleyebilelim
 
@@ -626,6 +646,113 @@ class IlacViewSet(viewsets.ModelViewSet):
         except Exception as e:
             return Response({'error': f'An error occurred while processing the file: {str(e)}'},
                             status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=False, methods=['get'], url_path='kullanim-talimati')
+    def kullanim_talimati(self, request):
+        slug = request.query_params.get('slug')
+
+        if not slug:
+            return Response({"error": "Slug parametresi gerekli."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            # İlgili ilaç objesini al
+            medication = Ilac.objects.select_related('ilac_form').get(slug=slug)
+        except Ilac.DoesNotExist:
+            raise NotFound("Belirtilen slug ile eşleşen bir ilaç bulunamadı.")
+
+            # Serializer kullanarak veriyi serileştir
+        serializer = IlacKullanımTalimatiSerializers(medication, context={'request': request})
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=['get'], url_path='ilac-arama')
+    def ilac_arama(self, request):
+        # Retrieve medications with related `ilac_form` data
+        medication = Ilac.objects.select_related('ilac_form').all()
+
+        # Serialize the data
+        serializer = IlacAramaSerializer(medication, many=True)
+
+        # Return serialized data in the response
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=['get'], url_path='ilac-arama-mobile')
+    def ilac_arama_mobile(self, request):
+        # Retrieve medications with related `ilac_form` data
+        medication = Ilac.objects.select_related('ilac_form').all().order_by('name')
+
+        # Serialize the data
+        serializer = IlacAramaMobilSerializer(medication, many=True)
+
+        # Return serialized data in the response
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=['get'], url_path='ilac-arama-detail')
+    def ilac_arama_detail(self, request):
+        # Get the slug parameter from the query params
+        slug = request.query_params.get('slug')
+
+        # If slug is missing, return a 400 error
+        if not slug:
+            return Response({"error": "Slug parametresi gerekli."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            # Retrieve the medication object based on the slug
+            medication = Ilac.objects.select_related('ilac_form', 'hassasiyet_turu').get(slug=slug)
+        except Ilac.DoesNotExist:
+            # Raise a 404 error if the medication is not found
+            raise NotFound("Belirtilen slug ile eşleşen bir ilaç bulunamadı.")
+
+        # Serialize the data
+        serializer = IlacAramaDetailSerializer(medication)
+
+        # Return the serialized data
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=['get'], url_path='ilac-doz-detail')
+    def ilac_doz_detail(self, request):
+        # Get the slug parameter from the query params
+        slug = request.query_params.get('slug')
+
+        # If slug is missing, return a 400 error
+        if not slug:
+            return Response({"error": "Slug parametresi gerekli."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            # Retrieve the medication object based on the slug
+            medication = Ilac.objects.select_related('ilac_form', 'hassasiyet_turu') \
+                .prefetch_related('hastaliklar') \
+                .get(slug=slug)
+        except Ilac.DoesNotExist:
+            # Raise a 404 error if the medication is not found
+            raise NotFound("Belirtilen slug ile eşleşen bir ilaç bulunamadı.")
+
+        # Serialize the data
+        serializer = IlacDozDetailSerializer(medication)
+
+        # Return the serialized data
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=['get'], url_path='ilac-nedir')
+    def ilac_nedir(self, request):
+        # Get the slug parameter from the query params
+        slug = request.query_params.get('slug')
+
+        # If slug is missing, return a 400 error
+        if not slug:
+            return Response({"error": "Slug parametresi gerekli."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            # Retrieve the medication object based on the slug
+            medication = Ilac.objects.select_related('ilac_form').get(slug=slug)
+        except Ilac.DoesNotExist:
+            # Raise a 404 error if the medication is not found
+            raise NotFound("Belirtilen slug ile eşleşen bir ilaç bulunamadı.")
+
+        # Serialize the data
+        serializer = IlacNedirSerializer(medication)
+
+        # Return the serialized data
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
 
 from .models import YasDoz
@@ -688,6 +815,7 @@ class YasDozViewSet(viewsets.ModelViewSet):
                     try:
                         # Fetch the Ilac object using 'ILAC ID'
                         ilac = Ilac.objects.get(name=row['İLAÇ AD'])
+                        print("ilaç:",ilac.name)
 
                         # Track the current dosage value and age range
                         current_doz = None
@@ -861,11 +989,19 @@ class KiloDozViewSet(viewsets.ModelViewSet, BaseOlcekHesaplayici):
         if tipik_max_doz is None:
             # `tipik_max_doz` değeri yoksa sadece minimum doz üzerinden hesapla
             if kilodoz.ilac.ilac_kategori.id in self.SPOON_ACCOUNTING_CATEGORIES:
-                min_kasik = (min_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                if min_doz>maksimum_anlik_doz:
+                    doz_degeri = maksimum_anlik_doz
+                else:
+                    doz_degeri = min_doz
+                min_kasik = (doz_degeri / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
                 min_kasik_mesaj = self.olcek_formatla(min_kasik)
                 doz_message = f"{min_kasik_mesaj} kullanın."
             else:
-                doz_message = f"{min_doz} ml kullanın."
+                if min_doz>maksimum_anlik_doz:
+                    doz_degeri = maksimum_anlik_doz
+                else:
+                    doz_degeri = min_doz
+                doz_message = f"{doz_degeri} ml kullanın."
 
 
         else:
@@ -1028,7 +1164,7 @@ class ExplanationDozViewSet(viewsets.ModelViewSet):
             df = pd.read_excel(file)
 
             # Check if required columns are present
-            required_columns = ['İLAÇ AD', 'Bilgi', 'durum']
+            required_columns = ['İLAÇ AD', 'Bilgi','Check Uyarı', 'durum']
             if not all(column in df.columns for column in required_columns):
                 return Response({
                     'error': 'Excel file must contain all required columns'
@@ -1049,10 +1185,15 @@ class ExplanationDozViewSet(viewsets.ModelViewSet):
 
                     bilgi = row['Bilgi'] if pd.notna(row['Bilgi']) else None
 
+                    check_uyari = row.get('Check Uyarı', '')
+                    if pd.isna(check_uyari):
+                        check_uyari = ''
+
                     # Create a new KiloDoz object
                     new_explanation = ExplanationDoz(
                         ilac=ilac,
-                        bilgi=bilgi
+                        bilgi=bilgi,
+                        check_uyari=check_uyari
                     )
 
                     # Save the new object
@@ -1265,11 +1406,19 @@ class HastalikKiloDozViewSet(viewsets.ModelViewSet,BaseOlcekHesaplayici):
         if tipik_max_doz is None:
             # `tipik_max_doz` değeri yoksa sadece minimum doz üzerinden hesapla
             if kilodoz.ilac.ilac_kategori.id in self.SPOON_ACCOUNTING_CATEGORIES:
-                min_kasik = (min_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                if min_doz>maksimum_anlik_doz:
+                    doz_degeri = maksimum_anlik_doz
+                else:
+                    doz_degeri = min_doz
+                min_kasik = (doz_degeri / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
                 min_kasik_mesaj = self.olcek_formatla(min_kasik)
                 doz_message = f"{min_kasik_mesaj} kullanın."
             else:
-                doz_message = f"{min_doz} ml kullanın."
+                if min_doz>maksimum_anlik_doz:
+                    doz_degeri = maksimum_anlik_doz
+                else:
+                    doz_degeri = min_doz
+                doz_message = f"{doz_degeri} ml kullanın."
 
 
         else:
@@ -1442,11 +1591,19 @@ class ArtanKiloDozViewSet(viewsets.ModelViewSet,BaseOlcekHesaplayici):
             if tipik_max_doz is None:
                 # `tipik_max_doz` değeri yoksa sadece minimum doz üzerinden hesapla
                 if kilodoz.ilac.ilac_kategori.id in self.SPOON_ACCOUNTING_CATEGORIES:
-                    min_kasik = (min_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                    if min_doz > maksimum_anlik_doz:
+                        doz_degeri = maksimum_anlik_doz
+                    else:
+                        doz_degeri = min_doz
+                    min_kasik = (doz_degeri / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
                     min_kasik_mesaj = self.olcek_formatla(min_kasik)
                     doz_message = f"{min_kasik_mesaj} kullanın."
                 else:
-                    doz_message = f"{min_doz} ml kullanın."
+                    if min_doz > maksimum_anlik_doz:
+                        doz_degeri = maksimum_anlik_doz
+                    else:
+                        doz_degeri = min_doz
+                    doz_message = f"{doz_degeri} ml kullanın."
             else:
                 # `tipik_max_doz` mevcutsa maksimum doz hesaplama
                 maks_doz = kilo * tipik_max_doz
@@ -1704,6 +1861,7 @@ class AzalanKiloDozViewSet(viewsets.ModelViewSet,BaseOlcekHesaplayici):
             else:
                 if maks_doz is None:
                     if kilodoz.ilac.ilac_kategori.id in self.SPOON_ACCOUNTING_CATEGORIES:
+
                         min_kasik = (min_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
                         min_kasik_mesaj = self.olcek_formatla(min_kasik)
                         doz_message = f"{min_kasik_mesaj} kullanın."
@@ -1879,11 +2037,19 @@ class HastalikArtanKiloDozViewSet(viewsets.ModelViewSet,BaseOlcekHesaplayici):
             if tipik_max_doz is None:
                 # Only minimum dose calculation
                 if kilodoz.ilac.ilac_kategori.id in self.SPOON_ACCOUNTING_CATEGORIES:
-                    min_kasik = (min_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                    if min_doz > maksimum_anlik_doz:
+                        doz_degeri = maksimum_anlik_doz
+                    else:
+                        doz_degeri = min_doz
+                    min_kasik = (doz_degeri / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
                     min_kasik_mesaj = self.olcek_formatla(min_kasik)
                     doz_message = f"{min_kasik_mesaj} kullanın."
                 else:
-                    doz_message = f"{min_doz} ml kullanın."
+                    if min_doz > maksimum_anlik_doz:
+                        doz_degeri = maksimum_anlik_doz
+                    else:
+                        doz_degeri = min_doz
+                    doz_message = f"{doz_degeri} ml kullanın."
             else:
                 maks_doz = kilo * tipik_max_doz
 
@@ -2196,9 +2362,12 @@ class HastalikAzalanKiloDozViewSet(viewsets.ModelViewSet,BaseOlcekHesaplayici):
                 if row['durum'] == True:
                     continue
 
+
                 try:
                     # İlgili Ilac nesnesini bul
                     ilac = Ilac.objects.get(name=row['İLAÇ AD'])
+
+                    print("ilaç:",ilac)
 
                     hastalik = Hastalik.objects.get(name=row['Hastalık Ad'])
 
@@ -2332,11 +2501,19 @@ class HastalikHemYasaHemKiloyaBagliArtanDozViewSet(viewsets.ModelViewSet,BaseOlc
             if tipik_max_doz is None:
                 # Only minimum dose calculation
                 if kilodoz.ilac.ilac_kategori.id in self.SPOON_ACCOUNTING_CATEGORIES:
-                    min_kasik = (min_doz / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+                    if min_doz > maksimum_anlik_doz:
+                        doz_degeri = maksimum_anlik_doz
+                    else:
+                        doz_degeri = min_doz
+                    min_kasik = (doz_degeri / self.KASIK_OLCEGI_ML).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
                     min_kasik_mesaj = self.olcek_formatla(min_kasik)
                     doz_message = f"{min_kasik_mesaj} kullanın."
                 else:
-                    doz_message = f"{min_doz} ml kullanın."
+                    if min_doz > maksimum_anlik_doz:
+                        doz_degeri = maksimum_anlik_doz
+                    else:
+                        doz_degeri = min_doz
+                    doz_message = f"{doz_degeri} ml kullanın."
             else:
                 maks_doz = kilo * tipik_max_doz
 
@@ -2537,12 +2714,6 @@ class HastalikHemYasaHemKiloyaBagliArtanDozViewSet(viewsets.ModelViewSet,BaseOlc
 
         # Sadece threshold_age alanını döndürmek
         return Response({'threshold_age': kilodoz.threshold_age}, status=status.HTTP_200_OK)
-
-
-
-
-
-
 
 
 
@@ -2800,7 +2971,7 @@ class HastalikHemYasaHemKiloyaBagliAzalanDozViewSet(viewsets.ModelViewSet,BaseOl
 # ------ besin takviyeleri ------
 
 from .models import Supplement,ProductCategory,Product
-from .serializers import SupplementSerializers,ProductCategorySerializers,ProductSerializers
+from .serializers import SupplementSerializers,ProductCategorySerializers,ProductSerializers,ProductSecondSerializers,ProductAramaSerializers,ProductAramaMobilSerializers
 
 
 
@@ -2832,7 +3003,7 @@ class ProductCategoryViewSet(viewsets.ModelViewSet):
         supplement = get_object_or_404(Supplement, id=supplement_id)
 
         # İlgili kategorileri filtrele
-        product_categories = ProductCategory.objects.filter(supplement=supplement)
+        product_categories = ProductCategory.objects.filter(supplement=supplement).order_by('name')
 
         # Kategorileri serileştir
         serializer = self.get_serializer(product_categories, many=True)
@@ -2841,6 +3012,7 @@ class ProductCategoryViewSet(viewsets.ModelViewSet):
         return Response(serializer.data, status=status.HTTP_200_OK)
 
 
+from rest_framework.exceptions import NotFound
 
 class ProductViewSet(viewsets.ModelViewSet):
     queryset = Product.objects.all().order_by('id')
@@ -2848,23 +3020,17 @@ class ProductViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'], url_path='list-products-by-category-no-paginations')
     def list_products_by_productcategory_no_paginations(self, request):
-        # product_category_id parametresini al
         product_category_id = request.query_params.get('product_category_id')
 
         if not product_category_id:
             return Response({"detail": "product_category_id is required."}, status=status.HTTP_400_BAD_REQUEST)
 
-        # product_category objesini güvenli bir şekilde getir
         product_category = get_object_or_404(ProductCategory, id=product_category_id)
 
-        # İlgili kategorileri filtrele
-        product = Product.objects.filter(product_category=product_category)
+        # Sadece id ve name alanlarını seç
+        product = Product.objects.filter(product_category=product_category).values('id', 'name')
 
-        # Kategorileri serileştir
-        serializer = self.get_serializer(product, many=True)
-
-        # Serileştirilmiş veriyi döndür
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        return Response(product, status=status.HTTP_200_OK)
 
     @action(detail=False, methods=['get'], url_path='list-products-by-category')
     def list_products_by_productcategory(self, request):
@@ -2877,21 +3043,136 @@ class ProductViewSet(viewsets.ModelViewSet):
         # Retrieve the product category safely
         product_category = get_object_or_404(ProductCategory, id=product_category_id)
 
-        # Filter products by the selected category
-        product_queryset = Product.objects.filter(product_category=product_category)
+        # Filter products by the selected category and select only id and name
+        product_queryset = Product.objects.filter(product_category=product_category).order_by("name").values('id',
+                                                                                                             'name','slug','nedir','ne_icin_kullanilir')
 
-        # Apply pagination to the queryset
+        # Apply pagination manually
         page = self.paginate_queryset(product_queryset)
         if page is not None:
-            serializer = self.get_serializer(page, many=True)
-            return self.get_paginated_response(serializer.data)
+            return self.get_paginated_response(page)
 
-        # If pagination is not applied, return all products
-        serializer = self.get_serializer(product_queryset, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        # Return all products if pagination is not applied
+        return Response(product_queryset, status=status.HTTP_200_OK)
+    @action(detail=False, methods=['get'], url_path='product-detail')
+    def product_detail(self, request):
+        # Query parametresinden slug'ı al
+        slug = request.query_params.get('slug')
+
+        if not slug:
+            return Response({"error": "Slug parametresi gerekli."}, status=400)
+
+        try:
+            # Slug'a göre ürünü al
+            product = Product.objects.get(slug=slug)
+        except Product.DoesNotExist:
+            raise NotFound("Belirtilen slug ile eşleşen bir ürün bulunamadı.")
+
+        # Serializer kullanarak ürünü döndür
+        serializer = ProductSecondSerializers(product)
+        return Response(serializer.data)
+
+    @action(detail=False, methods=['get'], url_path="product-full")
+    def product_full(self, request):
+        try:
+            # Fetch products and related categories
+            products = Product.objects.select_related("product_category__supplement").all()
+
+            # Serialize data
+            serializer = ProductAramaSerializers(products, many=True)
+
+            # Return serialized data
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        except Exception as e:
+            # Handle potential errors
+            return Response(
+                {"success": False, "error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+    @action(detail=False, methods=['get'], url_path="product-mobil-full")
+    def product_mobil_full(self, request):
+        try:
+            # Fetch products and related categories
+            products = Product.objects.all().order_by('name')
+
+            # Serialize data
+            serializer = ProductAramaMobilSerializers(products, many=True)
+
+            # Return serialized data
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        except Exception as e:
+            # Handle potential errors
+            return Response(
+                {"success": False, "error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
 
 
+    @action(detail=False, methods=['post'])
+    def bulk_create_from_excel(self, request):
+        file = request.FILES.get('file')
+        if not file:
+            return Response({'error': 'No file uploaded. Please upload a valid Excel file.'},
+                            status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            # Excel dosyasını oku
+            df = pd.read_excel(file)
+
+            # Gerekli sütunlar kontrolü
+            required_columns = ['title', 'kullanim_sekli','ne_ise_yarar_saglik_beyani', 'nedir','ana_kategori', 'alt_kategori', 'durum']
+            missing_columns = [col for col in required_columns if col not in df.columns]
+            if missing_columns:
+                return Response(
+                    {'error': f'Excel file is missing the following required columns: {", ".join(missing_columns)}'},
+                    status=status.HTTP_400_BAD_REQUEST)
+
+            # Yeni ürünler oluştur
+            records_created = 0
+            for _, row in df.iterrows():
+                try:
+                    # Eğer 'durum' True ise veya 'isim' boşsa atla
+                    if row.get('durum') == True or pd.isna(row.get('title')):
+                        continue
+
+                    # Ana kategori işlemleri
+                    ana_kategori_name = row.get('ana_kategori', '')
+                    ana_kategori = None
+                    if ana_kategori_name:
+                        ana_kategori, _ = Supplement.objects.get_or_create(name=ana_kategori_name)
+
+                    # Alt kategori işlemleri
+                    alt_kategori_name = row.get('alt_kategori', '')
+                    alt_kategori = None
+                    if alt_kategori_name and ana_kategori:
+                        alt_kategori, _ = ProductCategory.objects.get_or_create(
+                            name=alt_kategori_name,
+                            supplement=ana_kategori
+                        )
+
+                    # Yeni ürün oluştur
+                    Product.objects.create(
+                        name=row['title'],
+                        product_category=alt_kategori,
+                        explanation=row['kullanim_sekli'],
+                        nedir=row['nedir'],
+                        ne_icin_kullanilir=row['ne_ise_yarar_saglik_beyani'],
+                    )
+                    records_created += 1
+
+                except Exception as e:
+                    return Response({'error': f'Error processing row: {row.to_dict()}, Error: {str(e)}'},
+                                    status=status.HTTP_400_BAD_REQUEST)
+
+            return Response({'status': 'Products created successfully', 'records_created': records_created},
+                            status=status.HTTP_201_CREATED)
+
+        except Exception as e:
+            return Response({'error': f'An error occurred while processing the file: {str(e)}'},
+                            status=status.HTTP_400_BAD_REQUEST)
 
 
 from django.core.cache import cache
@@ -2935,6 +3216,7 @@ from .serializers import HatirlaticiSerializers, HatirlaticiSaatiSerializers, Bi
 from django.utils.dateparse import parse_date
 from django.db.models import Q
 from rest_framework.pagination import PageNumberPagination
+from rest_framework.permissions import IsAuthenticated
 
 class CustomPagination(PageNumberPagination):
     page_size = 10  # Set the default page size to 10
@@ -2943,6 +3225,7 @@ class CustomPagination(PageNumberPagination):
 class HatirlaticiViewSet(viewsets.ModelViewSet):
     queryset = Hatirlatici.objects.all().order_by('-id')
     serializer_class = HatirlaticiSerializers
+    permission_classes = [IsAuthenticated]
 
     def create(self, request, *args, **kwargs):
         # Get the original data from the request
@@ -3078,12 +3361,14 @@ class HatirlaticiSaatiViewSet(viewsets.ModelViewSet):
     queryset = HatirlaticiSaati.objects.all().order_by('id')
     serializer_class = HatirlaticiSaatiSerializers
     pagination_class = NoPagination
+    permission_classes = [IsAuthenticated]
 
 
 
 class BildirimViewSet(viewsets.ModelViewSet):
     queryset = Bildirim.objects.all().order_by('id')
     serializer_class = BildirimSerializers
+    permission_classes = [IsAuthenticated]
 
     @action(detail=False, methods=['get'], url_name='notifications-user-list')
     def notifications_user_list(self, request):
@@ -3091,7 +3376,7 @@ class BildirimViewSet(viewsets.ModelViewSet):
 
         # Filter notifications for the specific user
         notifications = Bildirim.objects.filter(hatirlatici__user=user).order_by('-tarih', '-saat').distinct()
-        print("notifications:",notifications)
+        #print("notifications:",notifications)
 
         # Use the default paginator
         page = self.paginate_queryset(notifications)
@@ -3128,3 +3413,354 @@ class BildirimViewSet(viewsets.ModelViewSet):
 
         # Tüm bildirimler başarıyla işlendiğinde başarı yanıtı döndürelim
         return Response({"success": True}, status=200)
+
+
+
+
+from .serializers import ContactSerializers
+from .models import Contact
+
+class ContactViewSet(viewsets.ModelViewSet):
+    queryset = Contact.objects.all().order_by('id')
+    serializer_class = ContactSerializers
+
+
+
+
+
+from django.contrib.auth import authenticate
+
+class DeleteUserAPIView(APIView):
+
+    def post(self, request):
+        email = request.data.get('email')
+        password = request.data.get('password')
+
+        if not email or not password:
+            return Response(
+                {"error": "Email ve şifre alanları zorunludur."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Kullanıcıyı doğrula
+        user = authenticate(email=email, password=password)
+        if not user:
+            return Response(
+                {"error": "Kullanıcı bulunamadı."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        # Profil silme işlemi
+        if hasattr(user, 'profil'):
+            user.profil.delete()
+
+        # Kullanıcı silme işlemi
+        user.delete()
+
+        return Response(
+            {"message": "Kullanıcı ve profili başarıyla silindi."},
+            status=status.HTTP_200_OK
+        )
+
+
+
+# bloglar
+
+from .models import Blogs,BlogContent,BlogContentLike,BlogContentRecorded
+from .serializers import BlogSerializer,MiniBlogSerializer,BlogContentSerializers
+from rest_framework import generics
+
+
+#  blog ana ketgoriler için başlıklar ve kapak gorseller
+class BlogListAPIView(APIView):
+    def get(self, request, *args, **kwargs):
+        queryset = Blogs.objects.filter(parent__isnull=True).prefetch_related('children').order_by('order')
+        serializer = BlogSerializer(queryset, many=True, context={'request': request})
+        return Response(serializer.data)
+
+# blog belirlenen kategori için akt bloglar, başlık ve görsel açıklama.
+class BlogSubListAPIView(APIView):
+    def get(self, request, id):
+        try:
+            blog = Blogs.objects.get(id=id)
+        except Blogs.DoesNotExist:
+            return Response(
+                {"detail": "Belirtilen ID'ye sahip blog bulunamadı."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        subblogs = Blogs.objects.filter(parent=blog, is_status=True).order_by('order')
+        serializer = MiniBlogSerializer(subblogs, many=True, context={'request': request})
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+# bloğa dair içerikler
+class BlogContentListAPIView(APIView):
+    def get(self, request, id):
+        try:
+            blog = Blogs.objects.get(id=id)
+        except Blogs.DoesNotExist:
+            return Response(
+                {"detail": "Belirtilen ID'ye sahip blog bulunamadı."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        subblogs = BlogContent.objects.filter(blog=blog, is_status=True).order_by('order')
+        serializer = BlogContentSerializers(subblogs, many=True, context={'request': request})
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+
+class BlogContentLikesStatusAPIView(APIView):
+    permission_classes = [IsAuthenticated]  # request.user kullanabilmek için
+
+    def post(self, request, id):
+        try:
+            blog_content = BlogContent.objects.get(id=id)
+        except BlogContent.DoesNotExist:
+            return Response(
+                {"detail": "BlogContent bulunamadı."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        user = request.user
+
+        # Kullanıcının daha önce beğenip beğenmediğini kontrol et
+        blog_content_like_exists = BlogContentLike.objects.filter(
+            user=user,
+            blog_content=blog_content
+        ).exists()  # .exist() değil .exists() doğru method
+
+        if blog_content_like_exists:
+            # Daha önce beğenmişse beğeniyi kaldır
+            BlogContentLike.objects.filter(
+                user=user,
+                blog_content=blog_content
+            ).delete()
+            return Response({"liked": False}, status=status.HTTP_200_OK)
+        else:
+            # Daha önce beğenmemişse beğeniyi oluştur
+            BlogContentLike.objects.create(
+                user=user,
+                blog_content=blog_content
+            )
+            return Response({"liked": True}, status=status.HTTP_201_CREATED)
+
+
+
+
+class BlogContentRecordedAPIView(APIView):
+    permission_classes = [IsAuthenticated]  # request.user kullanabilmek için
+
+    def post(self, request, id):
+        try:
+            blog_content = BlogContent.objects.get(id=id)
+        except BlogContent.DoesNotExist:
+            return Response(
+                {"detail": "BlogContent bulunamadı."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        user = request.user
+
+        # Tek sorgu: Kayıt var mı yok mu kontrol + yoksa oluştur
+        obj, created = BlogContentRecorded.objects.get_or_create(
+            user=user,
+            blog_content=blog_content
+        )
+
+        if created:
+            return Response(
+                {"detail": "Kayıt oluşturuldu.", "recorded": True},
+                status=status.HTTP_201_CREATED
+            )
+        else:
+            return Response(
+                {"detail": "Zaten kayıt var.", "recorded": True},
+                status=status.HTTP_200_OK
+            )
+
+
+class BlogContentRecordedDeleteAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, id):
+        try:
+            blog_content = BlogContent.objects.get(id=id)
+        except BlogContent.DoesNotExist:
+            return Response(
+                {"detail": "BlogContent bulunamadı."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        user = request.user
+
+        deleted_count, _ = BlogContentRecorded.objects.filter(
+            user=user,
+            blog_content=blog_content
+        ).delete()
+
+        if deleted_count > 0:
+            # Silme işlemi gerçekleşti
+            return Response(
+                {"detail": "Kayıt silindi."},
+                status=status.HTTP_200_OK
+            )
+        else:
+            # Silinecek kayıt yoktu
+            return Response(
+                {"detail": "Kayıt bulunamadı, silme işlemi yapılmadı."},
+                status=status.HTTP_200_OK
+            )
+
+
+
+
+
+
+
+# tüm story kategori başlıklar ve onlara ait kapak görseller ilk10
+
+from .models import StoryTitle,StoryCoverPhoto
+from .serializers import StoryTitleSerializers, MinimalStoryCoverPhotoSerializer
+
+class StoryTitleListAPIView(APIView):
+
+    def get(self,request,*arg,**kwarg):
+        queryset = StoryTitle.objects.filter(is_status=True)
+        serializers = StoryTitleSerializers(queryset,many=True,context={"request":request})
+        return Response(serializers.data)
+
+# tek bir story kategorisine ait kapakl görseller ve başıklar
+class StoryCoverPhotoListAPIView(APIView):
+    def get(self, request, id):
+        queryset = StoryCoverPhoto.objects.filter(is_status=True, story_title__id=id).order_by('order')
+
+
+        serializer = MinimalStoryCoverPhotoSerializer(queryset, many=True, context={"request": request})
+        return Response(serializer.data)
+
+
+
+from .models import StoryContent,StoryContentLike,StoryContentRecorded
+from .serializers import StoryContentSerializer
+
+# her hangi bir stoırye ait içerikler
+class StoryContentListAPIView(APIView):
+    def get(self, request, id):
+        try:
+            cover_photo = StoryCoverPhoto.objects.prefetch_related('story_content').get(id=id)
+        except StoryCoverPhoto.DoesNotExist:
+            return Response({'detail': 'StoryCoverPhoto not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        contents = cover_photo.story_content.filter(is_status=True).order_by('order')
+        serializer = StoryContentSerializer(contents, many=True,context={"request":request})
+        return Response(serializer.data)
+
+
+
+class StoryContentLikesStatusAPIView(APIView):
+    permission_classes = [IsAuthenticated]  # request.user kullanabilmek için
+
+    def post(self, request, id):
+        try:
+            story_content = StoryContent.objects.get(id=id)
+        except StoryContent.DoesNotExist:
+            return Response(
+                {"detail": "StoryContent bulunamadı."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        user = request.user
+
+        # Kullanıcının daha önce beğenip beğenmediğini kontrol et
+        story_content_like_exists = StoryContentLike.objects.filter(
+            user=user,
+            story_content=story_content
+        ).exists()  # .exist() değil .exists() doğru method
+
+        if story_content_like_exists:
+            # Daha önce beğenmişse beğeniyi kaldır
+            StoryContentLike.objects.filter(
+                user=user,
+                story_content=story_content
+            ).delete()
+            return Response({"liked": False}, status=status.HTTP_200_OK)
+        else:
+            # Daha önce beğenmemişse beğeniyi oluştur
+            StoryContentLike.objects.create(
+                user=user,
+                story_content=story_content
+            )
+            return Response({"liked": True}, status=status.HTTP_201_CREATED)
+
+
+
+
+class StoryContentRecordedAPIView(APIView):
+    permission_classes = [IsAuthenticated]  # request.user kullanabilmek için
+
+    def post(self, request, id):
+        try:
+            story_content = StoryContent.objects.get(id=id)
+        except StoryContent.DoesNotExist:
+            return Response(
+                {"detail": "StoryContent bulunamadı."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        user = request.user
+
+        # Tek sorgu: Kayıt var mı yok mu kontrol + yoksa oluştur
+        obj, created = StoryContentRecorded.objects.get_or_create(
+            user=user,
+            story_content=story_content
+        )
+
+        if created:
+            return Response(
+                {"detail": "Kayıt oluşturuldu.", "recorded": True},
+                status=status.HTTP_201_CREATED
+            )
+        else:
+            return Response(
+                {"detail": "Zaten kayıt var.", "recorded": True},
+                status=status.HTTP_200_OK
+            )
+
+
+class StoryContentRecordedDeleteAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, id):
+        try:
+            story_content = StoryContent.objects.get(id=id)
+        except StoryContent.DoesNotExist:
+            return Response(
+                {"detail": "StoryContent bulunamadı."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        user = request.user
+
+        deleted_count, _ = StoryContentRecorded.objects.filter(
+            user=user,
+            story_content=story_content
+        ).delete()
+
+        if deleted_count > 0:
+            # Silme işlemi gerçekleşti
+            return Response(
+                {"detail": "Kayıt silindi."},
+                status=status.HTTP_200_OK
+            )
+        else:
+            # Silinecek kayıt yoktu
+            return Response(
+                {"detail": "Kayıt bulunamadı, silme işlemi yapılmadı."},
+                status=status.HTTP_200_OK
+            )
+
+
+
+

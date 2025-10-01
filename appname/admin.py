@@ -3,7 +3,8 @@ from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from .models import CustomUser,Profile,Ilac,IlacKategori,HassasiyetTuru,Hastalik,\
     YasDoz,KiloDoz,ExplanationDoz,HatalikYasDoz,ArtanKiloDoz,HastalikKiloDoz,AzalanKiloDoz,\
     HastalikArtanKiloDoz,HastalikAzalanKiloDoz,HastalikHemYasaHemKiloyaBagliArtanDoz,\
-    HastalikHemYasaHemKiloyaBagliAzalanDoz,Supplement,ProductCategory,Product,Hatirlatici,HatirlaticiSaati,Bildirim,Form
+    HastalikHemYasaHemKiloyaBagliAzalanDoz,Supplement,ProductCategory,Product,Hatirlatici,HatirlaticiSaati,Bildirim,Form,Contact,\
+    Blogs,StoryTitle,StoryCoverPhoto,StoryContent,BlogContent,BlogContentRecorded,BlogContentLike,StoryContentRecorded,StoryContentLike
 
 class UserAdmin(BaseUserAdmin):
     model = CustomUser
@@ -44,4 +45,13 @@ admin.site.register(Product)
 admin.site.register(Hatirlatici)
 admin.site.register(HatirlaticiSaati)
 admin.site.register(Bildirim)
-
+admin.site.register(Contact)
+admin.site.register(Blogs)
+admin.site.register(StoryTitle)
+admin.site.register(StoryCoverPhoto)
+admin.site.register(StoryContent)
+admin.site.register(BlogContent)
+admin.site.register(BlogContentRecorded)
+admin.site.register(BlogContentLike)
+admin.site.register(StoryContentRecorded)
+admin.site.register(StoryContentLike)

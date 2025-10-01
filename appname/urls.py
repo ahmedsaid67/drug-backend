@@ -5,7 +5,10 @@ from .views import CustomAuthToken, CheckToken, UserInfoView, Logout,CustomUserV
     ExplanationDozViewSet,HatalikYasDozViewSet,HastalikKiloDozViewSet,ArtanKiloDozViewSet,AzalanKiloDozViewSet,\
     HastalikArtanKiloDozViewSet,HastalikAzalanKiloDozViewSet,HastalikHemYasaHemKiloyaBagliArtanDozViewSet,\
     HastalikHemYasaHemKiloyaBagliAzalanDozViewSet,SupplementViewSet,ProductCategoryViewSet,ProductViewSet,\
-    CombinedView,HatirlaticiViewSet,HatirlaticiSaatiViewSet,BildirimViewSet
+    CombinedView,HatirlaticiViewSet,HatirlaticiSaatiViewSet,BildirimViewSet,ContactViewSet,DeleteUserAPIView,\
+    BlogListAPIView,StoryTitleListAPIView,StoryContentListAPIView,BlogSubListAPIView,BlogContentListAPIView,StoryCoverPhotoListAPIView,StoryContentLikesStatusAPIView,\
+    StoryContentRecordedAPIView,StoryContentRecordedDeleteAPIView,BlogContentLikesStatusAPIView,BlogContentRecordedAPIView,BlogContentRecordedDeleteAPIView
+
 
 from django.conf import settings
 from django.conf.urls.static import static
@@ -86,6 +89,9 @@ router_hatirlaticisaati.register(r'reminder-hours', HatirlaticiSaatiViewSet)
 router_bildirim = DefaultRouter()
 router_bildirim.register(r'notifications', BildirimViewSet)
 
+router_contact = DefaultRouter()
+router_contact.register(r'contact', ContactViewSet)
+
 
 urlpatterns = [
 
@@ -96,6 +102,21 @@ urlpatterns = [
     path('logout/', Logout.as_view(), name='logout'),
     path('google/', GoogleLoginView.as_view(), name='google-login'),
     path('combined/', CombinedView.as_view(), name='combined-list'),
+
+    path('blogs/', BlogListAPIView.as_view(), name='blogs'),
+    path('sub-blogs/<int:id>/', BlogSubListAPIView.as_view(), name='sub-blogs-list'),
+    path('blogs-content/<int:id>/', BlogContentListAPIView.as_view(), name='blogs-content'),
+    path('blog-content-status/<int:id>/', BlogContentLikesStatusAPIView.as_view(), name='blog-content-status'),
+    path('blog-sontent-recorded/<int:id>/', BlogContentRecordedAPIView.as_view(), name='blog-content-recorded'),
+    path('blog-sontent-recorded-delete/<int:id>/', BlogContentRecordedDeleteAPIView.as_view(),name='blog-content-recorded-delete'),
+
+    path('story-title/', StoryTitleListAPIView.as_view(), name="story-title"),
+    path('story-cover-photo/<int:id>/', StoryCoverPhotoListAPIView.as_view(), name="story-cover-photo-list"),
+    path('story-content/<int:id>/', StoryContentListAPIView.as_view(), name='story-content-list'),
+    path('story-content-status/<int:id>/', StoryContentLikesStatusAPIView.as_view(), name='story-content-status'),
+    path('story-sontent-recorded/<int:id>/', StoryContentRecordedAPIView.as_view(), name='story-content-recorded'),
+    path('story-sontent-recorded-delete/<int:id>/', StoryContentRecordedDeleteAPIView.as_view(), name='story-content-recorded-delete'),
+
     path('', include(router_users.urls)),
     path('', include(router_profil.urls)),
     path('', include(router_reset.urls)),
@@ -122,6 +143,11 @@ urlpatterns = [
     path('', include(router_hatirlatici.urls)),
     path('', include(router_hatirlaticisaati.urls)),
     path('', include(router_bildirim.urls)),
+
+    path('', include(router_contact.urls)),
+
+
+    path('delete-user/', DeleteUserAPIView.as_view(), name='delete-user'),
 
 ]
 
