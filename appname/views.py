@@ -3473,6 +3473,7 @@ from rest_framework import generics
 
 #  blog ana ketgoriler için başlıklar ve kapak gorseller
 class BlogListAPIView(APIView):
+    permission_classes = [IsAuthenticated]
     def get(self, request, *args, **kwargs):
         queryset = Blogs.objects.filter(parent__isnull=True).prefetch_related('children').order_by('order')
         serializer = BlogSerializer(queryset, many=True, context={'request': request})
@@ -3480,6 +3481,7 @@ class BlogListAPIView(APIView):
 
 # blog belirlenen kategori için akt bloglar, başlık ve görsel açıklama.
 class BlogSubListAPIView(APIView):
+    permission_classes = [IsAuthenticated]
     def get(self, request, id):
         try:
             blog = Blogs.objects.get(id=id)
@@ -3496,6 +3498,7 @@ class BlogSubListAPIView(APIView):
 
 # bloğa dair içerikler
 class BlogContentListAPIView(APIView):
+    permission_classes = [IsAuthenticated]
     def get(self, request, id):
         try:
             blog = Blogs.objects.get(id=id)
@@ -3625,6 +3628,7 @@ from .models import StoryTitle,StoryCoverPhoto
 from .serializers import StoryTitleSerializers, MinimalStoryCoverPhotoSerializer
 
 class StoryTitleListAPIView(APIView):
+    permission_classes = [IsAuthenticated]
 
     def get(self,request,*arg,**kwarg):
         queryset = StoryTitle.objects.filter(is_status=True)
@@ -3633,6 +3637,7 @@ class StoryTitleListAPIView(APIView):
 
 # tek bir story kategorisine ait kapakl görseller ve başıklar
 class StoryCoverPhotoListAPIView(APIView):
+    permission_classes = [IsAuthenticated]
     def get(self, request, id):
         queryset = StoryCoverPhoto.objects.filter(is_status=True, story_title__id=id).order_by('order')
 
@@ -3647,6 +3652,7 @@ from .serializers import StoryContentSerializer
 
 # her hangi bir stoırye ait içerikler
 class StoryContentListAPIView(APIView):
+    permission_classes = [IsAuthenticated]
     def get(self, request, id):
         try:
             cover_photo = StoryCoverPhoto.objects.prefetch_related('story_content').get(id=id)
