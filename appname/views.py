@@ -421,6 +421,18 @@ class FormViewSet(viewsets.ModelViewSet):
     serializer_class = FormSerializers
     pagination_class = NoPagination
 
+    @action(detail=False, methods=['get'], url_path='mobile-form')
+    def mobile_form(self, request):
+        if not request.user.is_authenticated:
+            return Response(
+                {"error": "Kullanıcı doğrulanmadı. Lütfen giriş yapın."},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        forms = Form.objects.all().order_by("order")
+        serializer = FormSerializers(forms, many=True, context={'request': request})
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
     @action(detail=False, methods=['post'])
     def bulk_create_from_excel(self, request):
         file = request.FILES.get('file')
@@ -2980,6 +2992,20 @@ class SupplementViewSet(viewsets.ModelViewSet):
     serializer_class = SupplementSerializers
     pagination_class = NoPagination
 
+    @action(detail=False, methods=['get'], url_path='mobile-supplements')
+    def mobile_supplements(self, request):
+        if not request.user.is_authenticated:
+            return Response(
+                {"error": "Kullanıcı doğrulanmadı. Lütfen giriş yapın."},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        queryset = Supplement.objects.all().order_by('order')
+
+        serializer = SupplementSerializers(queryset, many=True, context={'request': request})
+
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
 
 
 
@@ -3349,6 +3375,25 @@ class HatirlaticiViewSet(viewsets.ModelViewSet):
 
         # Bitiş tarihini bugünün tarihi olarak ayarla
         hatirlatma.bitis_tarihi = timezone.now().date()
+
+        # Değişiklikleri kaydet
+        hatirlatma.save()
+
+        # Değişiklikleri döndürmek için serializer kullan
+        serializer = self.get_serializer(hatirlatma)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['put'], url_path='stoped-version2')
+    def stoped_version2(self, request, pk=None):
+        hatirlatma = self.get_object()  # ID ile hatırlatıcıyı bul
+
+        # `is_stopped` alanını True yap
+        hatirlatma.is_stopped = True
+
+        bitis_tarihi = request.data.get('bitis_tarihi')
+
+        # Bitiş tarihini bugünün tarihi olarak ayarla
+        hatirlatma.bitis_tarihi = bitis_tarihi
 
         # Değişiklikleri kaydet
         hatirlatma.save()
