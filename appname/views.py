@@ -3559,40 +3559,80 @@ class BlogContentListAPIView(APIView):
 
 
 
-class BlogContentLikesStatusAPIView(APIView):
-    permission_classes = [IsAuthenticated]  # request.user kullanabilmek için
+# kayıtlı blog contenetleri listele ->paginationlu
+class BlogContentRecordedListAPIView(generics.ListAPIView):
+    permission_classes = [IsAuthenticated]
+    serializer_class = BlogContentSerializers
 
+    def get_queryset(self):
+        user = self.request.user
+        return BlogContent.objects.filter(record__user=user)
+
+
+
+
+# blog content beğen
+class BlogContentLikeAPIView(APIView):
+    permission_classes = [IsAuthenticated]
     def post(self, request, id):
         try:
             blog_content = BlogContent.objects.get(id=id)
         except BlogContent.DoesNotExist:
             return Response(
-                {"detail": "BlogContent bulunamadı."},
+                {"detail": "İlgili içerik bulunamadı."},
                 status=status.HTTP_404_NOT_FOUND
             )
 
         user = request.user
 
-        # Kullanıcının daha önce beğenip beğenmediğini kontrol et
-        blog_content_like_exists = BlogContentLike.objects.filter(
+        # Beğeni oluştur / var ise tekrar oluşturma
+        blog_like, created_like = BlogContentLike.objects.get_or_create(
             user=user,
-            blog_content=blog_content
-        ).exists()  # .exist() değil .exists() doğru method
+            story_content=blog_content
+        )
 
-        if blog_content_like_exists:
-            # Daha önce beğenmişse beğeniyi kaldır
-            BlogContentLike.objects.filter(
-                user=user,
-                blog_content=blog_content
-            ).delete()
-            return Response({"liked": False}, status=status.HTTP_200_OK)
-        else:
-            # Daha önce beğenmemişse beğeniyi oluştur
-            BlogContentLike.objects.create(
-                user=user,
-                blog_content=blog_content
+        if created_like:
+            return Response(
+                {"detail": "Beğeni oluşturuldu.", "recorded": True},
+                status=status.HTTP_201_CREATED
             )
-            return Response({"liked": True}, status=status.HTTP_201_CREATED)
+        else:
+            return Response(
+                {"detail": "Zaten beğeni var.", "recorded": True},
+                status=status.HTTP_200_OK
+            )
+
+
+#blog content beğeni kaldır
+
+class BlogContentLikeRemoveAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+    def post(self, request, id):
+        try:
+            blog_content = BlogContent.objects.get(id=id)
+        except StoryContent.DoesNotExist:
+            return Response(
+                {"detail": "İlgili içerik bulunamadı."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        user = request.user
+
+        # Beğeni sil
+        deleted_count, _= BlogContentLike.objects.filter(user=user, story_content=blog_content).delete()
+
+        if deleted_count > 0:
+            # Silme işlemi gerçekleşti
+            return Response(
+                {"detail": "Beğeni silindi."},
+                status=status.HTTP_200_OK
+            )
+        else:
+            # Silinecek kayıt yoktu
+            return Response(
+                {"detail": "Beğeni bulunamadı, silme işlemi yapılmadı."},
+                status=status.HTTP_200_OK
+            )
 
 
 
@@ -3614,7 +3654,7 @@ class BlogContentRecordedAPIView(APIView):
         # Tek sorgu: Kayıt var mı yok mu kontrol + yoksa oluştur
         obj, created = BlogContentRecorded.objects.get_or_create(
             user=user,
-            blog_content=blog_content
+            story_content=blog_content
         )
 
         if created:
@@ -3645,7 +3685,7 @@ class BlogContentRecordedDeleteAPIView(APIView):
 
         deleted_count, _ = BlogContentRecorded.objects.filter(
             user=user,
-            blog_content=blog_content
+            story_content=blog_content
         ).delete()
 
         if deleted_count > 0:
@@ -3695,6 +3735,7 @@ class StoryCoverPhotoListAPIView(APIView):
 from .models import StoryContent,StoryContentLike,StoryContentRecorded
 from .serializers import StoryContentSerializer
 
+
 # her hangi bir stoırye ait içerikler
 class StoryContentListAPIView(APIView):
     permission_classes = [IsAuthenticated]
@@ -3710,40 +3751,80 @@ class StoryContentListAPIView(APIView):
 
 
 
-class StoryContentLikesStatusAPIView(APIView):
-    permission_classes = [IsAuthenticated]  # request.user kullanabilmek için
+# kayıtlı storylerimi listele ->paginationlu
+class StoryContentRecordedListAPIView(generics.ListAPIView):
+    permission_classes = [IsAuthenticated]
+    serializer_class = StoryContentSerializer
 
+    def get_queryset(self):
+        user = self.request.user
+        return StoryContent.objects.filter(record__user=user)
+
+
+
+
+# story beğen
+class StoryContentLikeAPIView(APIView):
+    permission_classes = [IsAuthenticated]
     def post(self, request, id):
         try:
             story_content = StoryContent.objects.get(id=id)
         except StoryContent.DoesNotExist:
             return Response(
-                {"detail": "StoryContent bulunamadı."},
+                {"detail": "İlgili içerik bulunamadı."},
                 status=status.HTTP_404_NOT_FOUND
             )
 
         user = request.user
 
-        # Kullanıcının daha önce beğenip beğenmediğini kontrol et
-        story_content_like_exists = StoryContentLike.objects.filter(
+        # Beğeni oluştur / var ise tekrar oluşturma
+        story_like, created_like = StoryContentLike.objects.get_or_create(
             user=user,
             story_content=story_content
-        ).exists()  # .exist() değil .exists() doğru method
+        )
 
-        if story_content_like_exists:
-            # Daha önce beğenmişse beğeniyi kaldır
-            StoryContentLike.objects.filter(
-                user=user,
-                story_content=story_content
-            ).delete()
-            return Response({"liked": False}, status=status.HTTP_200_OK)
-        else:
-            # Daha önce beğenmemişse beğeniyi oluştur
-            StoryContentLike.objects.create(
-                user=user,
-                story_content=story_content
+        if created_like:
+            return Response(
+                {"detail": "Beğeni oluşturuldu.", "recorded": True},
+                status=status.HTTP_201_CREATED
             )
-            return Response({"liked": True}, status=status.HTTP_201_CREATED)
+        else:
+            return Response(
+                {"detail": "Zaten beğeni var.", "recorded": True},
+                status=status.HTTP_200_OK
+            )
+
+
+#story beğeni kaldır
+
+class StoryContentLikeRemoveAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+    def post(self, request, id):
+        try:
+            story_content = StoryContent.objects.get(id=id)
+        except StoryContent.DoesNotExist:
+            return Response(
+                {"detail": "İlgili içerik bulunamadı."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        user = request.user
+
+        # Beğeni sil
+        deleted_count, _= StoryContentLike.objects.filter(user=user, story_content=story_content).delete()
+
+        if deleted_count > 0:
+            # Silme işlemi gerçekleşti
+            return Response(
+                {"detail": "Beğeni silindi."},
+                status=status.HTTP_200_OK
+            )
+        else:
+            # Silinecek kayıt yoktu
+            return Response(
+                {"detail": "Beğeni bulunamadı, silme işlemi yapılmadı."},
+                status=status.HTTP_200_OK
+            )
 
 
 

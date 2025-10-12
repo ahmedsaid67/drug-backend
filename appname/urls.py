@@ -6,8 +6,9 @@ from .views import CustomAuthToken, CheckToken, UserInfoView, Logout,CustomUserV
     HastalikArtanKiloDozViewSet,HastalikAzalanKiloDozViewSet,HastalikHemYasaHemKiloyaBagliArtanDozViewSet,\
     HastalikHemYasaHemKiloyaBagliAzalanDozViewSet,SupplementViewSet,ProductCategoryViewSet,ProductViewSet,\
     CombinedView,HatirlaticiViewSet,HatirlaticiSaatiViewSet,BildirimViewSet,ContactViewSet,DeleteUserAPIView,\
-    BlogListAPIView,StoryTitleListAPIView,StoryContentListAPIView,BlogSubListAPIView,BlogContentListAPIView,StoryCoverPhotoListAPIView,StoryContentLikesStatusAPIView,\
-    StoryContentRecordedAPIView,StoryContentRecordedDeleteAPIView,BlogContentLikesStatusAPIView,BlogContentRecordedAPIView,BlogContentRecordedDeleteAPIView
+    BlogListAPIView,StoryTitleListAPIView,StoryContentListAPIView,BlogSubListAPIView,BlogContentListAPIView,StoryCoverPhotoListAPIView,\
+    StoryContentLikeAPIView,StoryContentLikeRemoveAPIView,StoryContentRecordedListAPIView,StoryContentRecordedAPIView,StoryContentRecordedDeleteAPIView,\
+    BlogContentLikeAPIView,BlogContentLikeRemoveAPIView,BlogContentRecordedAPIView,BlogContentRecordedDeleteAPIView,BlogContentRecordedListAPIView
 
 
 from django.conf import settings
@@ -106,16 +107,20 @@ urlpatterns = [
     path('blogs/', BlogListAPIView.as_view(), name='blogs'),
     path('sub-blogs/<int:id>/', BlogSubListAPIView.as_view(), name='sub-blogs-list'),
     path('blogs-content/<int:id>/', BlogContentListAPIView.as_view(), name='blogs-content'),
-    path('blog-content-status/<int:id>/', BlogContentLikesStatusAPIView.as_view(), name='blog-content-status'),
-    path('blog-sontent-recorded/<int:id>/', BlogContentRecordedAPIView.as_view(), name='blog-content-recorded'),
-    path('blog-sontent-recorded-delete/<int:id>/', BlogContentRecordedDeleteAPIView.as_view(),name='blog-content-recorded-delete'),
+    path('blog-content-like/<int:id>/', BlogContentLikeAPIView.as_view(), name='blog-content-like'),
+    path('blog-content-like-remove/<int:id>/', BlogContentLikeRemoveAPIView.as_view(), name='blog-content-remove'),
+    path('blog-content-recorded/<int:id>/', BlogContentRecordedAPIView.as_view(), name='blog-content-recorded'),
+    path('blog-content-recorded-delete/<int:id>/', BlogContentRecordedDeleteAPIView.as_view(),name='blog-content-recorded-delete'),
+    path('blog-content-records/', BlogContentRecordedListAPIView.as_view(), name='blog-content-records'),
 
     path('story-title/', StoryTitleListAPIView.as_view(), name="story-title"),
     path('story-cover-photo/<int:id>/', StoryCoverPhotoListAPIView.as_view(), name="story-cover-photo-list"),
     path('story-content/<int:id>/', StoryContentListAPIView.as_view(), name='story-content-list'),
-    path('story-content-status/<int:id>/', StoryContentLikesStatusAPIView.as_view(), name='story-content-status'),
-    path('story-sontent-recorded/<int:id>/', StoryContentRecordedAPIView.as_view(), name='story-content-recorded'),
-    path('story-sontent-recorded-delete/<int:id>/', StoryContentRecordedDeleteAPIView.as_view(), name='story-content-recorded-delete'),
+    path('story-content-like/<int:id>/', StoryContentLikeAPIView.as_view(), name='story-content-like'),
+    path('story-content-like-remove/<int:id>/', StoryContentLikeRemoveAPIView.as_view(), name='story-content-like-remove'),
+    path('story-content-recorded/<int:id>/', StoryContentRecordedAPIView.as_view(), name='story-content-recorded'),
+    path('story-content-recorded-delete/<int:id>/', StoryContentRecordedDeleteAPIView.as_view(), name='story-content-recorded-delete'),
+    path('story-content-records/', StoryContentRecordedListAPIView.as_view(), name='story-content-records'),
 
     path('', include(router_users.urls)),
     path('', include(router_profil.urls)),
