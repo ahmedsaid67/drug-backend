@@ -2,7 +2,7 @@ from django.shortcuts import render
 from rest_framework.authtoken.models import Token
 from rest_framework.authtoken.views import ObtainAuthToken,ObtainEmailAuthToken
 from rest_framework.views import APIView
-from .serializers import CustomUserSerializer,ProfileSerilizers
+from .serializers import CustomUserSerializer,ProfileSerilizers,CustomUserComplexSerializer
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -55,8 +55,17 @@ class UserInfoView(APIView):
 
     def get(self, request, format=None):
         user = request.user
-        serializer = CustomUserSerializer(user)
+        serializer = CustomUserSerializer(user )
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class UserInfoComplexView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request,):
+        user = request.user
+        sserializer = CustomUserComplexSerializer(user, context={'request': request})
+        return Response(sserializer.data, status=status.HTTP_200_OK)
 
 
 
@@ -83,6 +92,8 @@ class CustomUserViewSet(viewsets.ModelViewSet):
 class ProfilViewSet(viewsets.ModelViewSet):
     queryset = Profile.objects.all()
     serializer_class = ProfileSerilizers
+
+    permission_classes = [IsAuthenticated]
 
 
     @action(detail=False, methods=['get'], url_path='get_profile_by_user_id/(?P<user_id>\d+)')

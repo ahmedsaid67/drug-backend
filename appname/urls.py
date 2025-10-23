@@ -8,7 +8,7 @@ from .views import CustomAuthToken, CheckToken, UserInfoView, Logout,CustomUserV
     CombinedView,HatirlaticiViewSet,HatirlaticiSaatiViewSet,BildirimViewSet,ContactViewSet,DeleteUserAPIView,\
     BlogListAPIView,StoryTitleListAPIView,StoryContentListAPIView,BlogSubListAPIView,BlogContentListAPIView,StoryCoverPhotoListAPIView,\
     StoryContentLikeAPIView,StoryContentLikeRemoveAPIView,StoryContentRecordedListAPIView,StoryContentRecordedAPIView,StoryContentRecordedDeleteAPIView,\
-    BlogContentLikeAPIView,BlogContentLikeRemoveAPIView,BlogContentRecordedAPIView,BlogContentRecordedDeleteAPIView,BlogContentRecordedListAPIView
+    BlogContentLikeAPIView,BlogContentLikeRemoveAPIView,BlogContentRecordedAPIView,BlogContentRecordedDeleteAPIView,BlogContentRecordedListAPIView,UserInfoComplexView
 
 
 from django.conf import settings
@@ -100,6 +100,7 @@ urlpatterns = [
     path('token/', CustomAuthToken.as_view(), name='api-token'),
     path('check-token/', CheckToken.as_view(), name='check-token'),
     path('user-info/', UserInfoView.as_view(), name='user-info'),
+    path('user-info-complex/', UserInfoComplexView.as_view(), name='user-info-complex'),
     path('logout/', Logout.as_view(), name='logout'),
     path('google/', GoogleLoginView.as_view(), name='google-login'),
     path('combined/', CombinedView.as_view(), name='combined-list'),

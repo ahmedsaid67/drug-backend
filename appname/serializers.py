@@ -40,6 +40,8 @@ class CustomUserSerializer(serializers.ModelSerializer):
         return instance
 
 
+
+
 class ProfileSerilizers(serializers.ModelSerializer):
     user_first_name = serializers.CharField(allow_blank=True, required=False)
     user_last_name = serializers.CharField(allow_blank=True, required=False)
@@ -436,7 +438,7 @@ class ContactSerializers(serializers.ModelSerializer):
 
 # bloglar
 
-from .models import Blogs,BlogContent
+from .models import Blogs,BlogContent,BlogContentLike,BlogContentRecorded
 class BlogSerializer(serializers.ModelSerializer):
     children = serializers.SerializerMethodField()
 
@@ -510,7 +512,7 @@ class StoryTitleSerializers(serializers.ModelSerializer):
         return MinimalStoryCoverPhotoSerializer(story_cover_photo, many=True, context=self.context).data
 
 
-from .models import StoryContent,StoryContentLike
+from .models import StoryContent,StoryContentLike,StoryContentRecorded
 
 class StoryContentSerializer(serializers.ModelSerializer):
 
@@ -533,6 +535,54 @@ class StoryContentSerializer(serializers.ModelSerializer):
     def get_is_recorded(self,obj):
         user = self.context.get("request").user
         return obj.record.filter(user=user).exists()
+
+
+class CustomUserComplexSerializer(serializers.ModelSerializer):
+    total_likes = serializers.SerializerMethodField()
+    total_blog_content_recorded = serializers.SerializerMethodField()
+    total_story_content_recorded = serializers.SerializerMethodField()
+
+    class Meta:
+        model = CustomUser
+        fields = (
+            'id', 'email', 'first_name', 'last_name',
+            'total_likes',
+            'total_blog_content_recorded',
+            'total_story_content_recorded'
+        )
+
+    def get_total_likes(self, obj):
+        request = self.context.get('request')
+        if request and hasattr(request, 'user'):
+            blog_content_count = BlogContentLike.objects.filter(user=request.user).count()
+            story_content_count = StoryContentLike.objects.filter(user=request.user).count()
+            return blog_content_count + story_content_count
+        return 0
+
+    def get_total_blog_content_recorded(self, obj):
+        request = self.context.get('request')
+        if request and hasattr(request, 'user'):
+            return BlogContentRecorded.objects.filter(user=request.user).count()
+        return 0
+
+    def get_total_story_content_recorded(self, obj):
+        request = self.context.get('request')
+        if request and hasattr(request, 'user'):
+            return StoryContentRecorded.objects.filter(user=request.user).count()
+        return 0
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
