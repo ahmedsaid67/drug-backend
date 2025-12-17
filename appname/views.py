@@ -485,6 +485,8 @@ class FormViewSet(viewsets.ModelViewSet):
 
 from .models import Ilac
 from .serializers import IlacListSerializer,IlacDetailSerializer,IlacKullanımTalimatiSerializers,IlacAramaSerializer,IlacAramaDetailSerializer,IlacDozDetailSerializer,IlacNedirSerializer,IlacAramaMobilSerializer
+from django.http import HttpResponse
+
 
 class IlacViewSet(viewsets.ModelViewSet):
     queryset = Ilac.objects.all().select_related('ilac_kategori', 'hassasiyet_turu','ilac_form').prefetch_related('hastaliklar').order_by('id')
@@ -581,6 +583,25 @@ class IlacViewSet(viewsets.ModelViewSet):
         serializer = IlacListSerializer(medications, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
+    @action(detail=False, methods=['get'])
+    def bulk_get_from_excel(self, request):
+        # Tüm ilaçları al
+        ilaclar = Ilac.objects.all()
+
+        # İlaç isimlerini listele
+        data = [{'name': ilac.name} for ilac in ilaclar]
+
+        # Pandas DataFrame oluştur
+        df = pd.DataFrame(data)
+
+        # Excel dosyasını belleğe yaz
+        response = HttpResponse(content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+        response['Content-Disposition'] = 'attachment; filename="ilac_listesi.xlsx"'
+        df.to_excel(response, index=False)
+
+        return response
+
+    
     @action(detail=False, methods=['post'])
     def bulk_create_from_excel(self, request):
         file = request.FILES.get('file')
