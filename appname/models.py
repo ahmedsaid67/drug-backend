@@ -145,7 +145,7 @@ class Form(models.Model):
 
 class Ilac(models.Model):
     name = models.CharField(max_length=250, null=True, blank=True)
-    etken_madde = models.CharField(max_length=200, null=True, blank=True)
+    etken_madde = models.CharField(max_length=400, null=True, blank=True)
     document = models.FileField(upload_to='documents', null=True, blank=True)  # PDF dosyası için alan
     ilac_kategori = models.ForeignKey(IlacKategori, null=True, blank=True, on_delete=models.SET_NULL)
     ilac_form = models.ForeignKey(Form, null=True, blank=True, on_delete=models.SET_NULL)
