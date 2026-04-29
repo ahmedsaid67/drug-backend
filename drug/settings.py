@@ -58,7 +58,7 @@ CACHES = {
 
 
 # settings.py
-GOOGLE_CLIENT_ID = '961430999782-h5hk92jjacn5gb2rjt8mmv6nrlpftarp.apps.googleusercontent.com'
+GOOGLE_CLIENT_ID = "383176748485-8vjv529slq4aahd024v3c0lfoq6g5r85.apps.googleusercontent.com"
 
 
 INSTALLED_APPS = [
